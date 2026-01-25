@@ -1,0 +1,7 @@
+{
+  "port": 8443,
+  "insecure": true,
+  "token": "k8s-analyzer-token",
+  "kubeconfig": "",
+  "log_level": "info"
+}

@@ -1,0 +1,420 @@
+// Package shell 测试 Shell Executor MCP Client
+package shell
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      Config
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name: "valid config with one server",
+			config: Config{
+				Servers: []ServerConfig{
+					{Name: "server1", URL: "http://localhost:8080"},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "valid config with multiple servers",
+			config: Config{
+				Servers: []ServerConfig{
+					{Name: "server1", URL: "http://localhost:8080"},
+					{Name: "server2", URL: "http://localhost:8081"},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name:        "empty servers",
+			config:      Config{Servers: []ServerConfig{}},
+			expectError: true,
+			errorMsg:    "at least one server is required",
+		},
+		{
+			name: "server without name",
+			config: Config{
+				Servers: []ServerConfig{
+					{URL: "http://localhost:8080"},
+				},
+			},
+			expectError: true,
+			errorMsg:    "name is required",
+		},
+		{
+			name: "server without url",
+			config: Config{
+				Servers: []ServerConfig{
+					{Name: "server1"},
+				},
+			},
+			expectError: true,
+			errorMsg:    "url is required",
+		},
+		{
+			name: "invalid url",
+			config: Config{
+				Servers: []ServerConfig{
+					{Name: "server1", URL: "://invalid"},
+				},
+			},
+			expectError: true,
+			errorMsg:    "invalid url",
+		},
+		{
+			name: "config with defaults",
+			config: Config{
+				Servers: []ServerConfig{
+					{Name: "server1", URL: "http://localhost:8080"},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+
+			if tt.expectError {
+				assert.Error(t, err, "应该返回错误")
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg, "错误信息应包含指定内容")
+				}
+			} else {
+				assert.NoError(t, err, "不应该返回错误")
+				// 验证默认值
+				assert.Equal(t, 30*time.Second, tt.config.Timeout, "应该设置默认超时")
+				assert.Equal(t, 3, tt.config.RetryConfig.MaxAttempts, "应该设置默认重试次数")
+				assert.Equal(t, "/sse", tt.config.SSEPath, "应该设置默认 SSE 路径")
+			}
+		})
+	}
+}
+
+func TestNewClient(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      Config
+		expectError bool
+	}{
+		{
+			name: "valid config",
+			config: Config{
+				Servers: []ServerConfig{
+					{Name: "server1", URL: "http://localhost:8080"},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "invalid config",
+			config: Config{
+				Servers: []ServerConfig{},
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := NewClient(tt.config)
+
+			if tt.expectError {
+				assert.Error(t, err, "应该返回错误")
+				assert.Nil(t, client, "client 应为 nil")
+			} else {
+				assert.NoError(t, err, "不应该返回错误")
+				assert.NotNil(t, client, "client 不应为 nil")
+				assert.False(t, client.connected, "初始状态应为未连接")
+				assert.Equal(t, tt.config, client.config, "配置应该正确保存")
+			}
+		})
+	}
+}
+
+func TestNewClientFromFile(t *testing.T) {
+	// 这个测试需要实际的配置文件
+	// 在实际使用中，应该测试从文件加载配置
+	t.Skip("需要实际的配置文件")
+}
+
+func TestClient_IsConnected(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	assert.False(t, client.IsConnected(), "初始状态应为未连接")
+}
+
+func TestClient_GetConfig(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080", Token: "test-token"},
+		},
+		Timeout:        60 * time.Second,
+		EnableFailover: true,
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	returnedConfig := client.GetConfig()
+	assert.Equal(t, config, returnedConfig, "返回的配置应该与原始配置相同")
+}
+
+func TestClient_GetCurrentServer(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	// 未连接时，GetCurrentServer 应该返回 nil
+	server := client.GetCurrentServer()
+	assert.Nil(t, server, "未连接时应返回 nil")
+}
+
+func TestClient_Close(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	// 关闭未连接的 client
+	err = client.Close()
+	assert.NoError(t, err, "关闭未连接的 client 不应失败")
+	assert.False(t, client.IsConnected(), "状态应为未连接")
+}
+
+func TestClient_UpdateConfig(t *testing.T) {
+	oldConfig := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+		EnableFailover: false,
+	}
+
+	client, err := NewClient(oldConfig)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	newConfig := Config{
+		Servers: []ServerConfig{
+			{Name: "server2", URL: "http://localhost:8081"},
+		},
+		EnableFailover: true,
+	}
+
+	err = client.UpdateConfig(newConfig)
+	assert.NoError(t, err, "更新配置不应失败")
+
+	updatedConfig := client.GetConfig()
+	assert.Equal(t, newConfig, updatedConfig, "配置应该已更新")
+	assert.False(t, client.IsConnected(), "更新配置后应断开连接")
+}
+
+func TestClient_UpdateConfig_Invalid(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	invalidConfig := Config{
+		Servers: []ServerConfig{},
+	}
+
+	err = client.UpdateConfig(invalidConfig)
+	assert.Error(t, err, "更新为无效配置应该失败")
+}
+
+func TestClient_Connect_NotConnected(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	// 尝试连接到不存在的服务器（会失败）
+	ctx := context.Background()
+	err = client.Connect(ctx)
+	assert.Error(t, err, "连接到不存在的服务器应该失败")
+}
+
+func TestClient_Connect_AlreadyConnected(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	// 模拟已连接状态
+	client.connected = true
+
+	ctx := context.Background()
+	err = client.Connect(ctx)
+	assert.NoError(t, err, "已连接时再次连接不应失败")
+}
+
+func TestClient_CallTool_NotConnected(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	ctx := context.Background()
+	_, err = client.CallTool(ctx, "test_tool", nil)
+	assert.Error(t, err, "未连接时调用工具应该失败")
+	assert.Contains(t, err.Error(), "not connected", "错误信息应包含未连接标记")
+}
+
+func TestClient_ListTools_NotConnected(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	ctx := context.Background()
+	_, err = client.ListTools(ctx)
+	assert.Error(t, err, "未连接时列出工具应该失败")
+	assert.Contains(t, err.Error(), "not connected", "错误信息应包含未连接标记")
+}
+
+func TestClient_HealthCheck_NotConnected(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	ctx := context.Background()
+	err = client.HealthCheck(ctx)
+	assert.Error(t, err, "未连接时健康检查应该失败")
+	assert.Contains(t, err.Error(), "not connected", "错误信息应包含未连接标记")
+}
+
+func TestClient_isConnectionError(t *testing.T) {
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "connection error",
+			err:      &ConnectionError{Reason: "connection failed"},
+			expected: true,
+		},
+		{
+			name:     "generic error",
+			err:      &ToolExecutionError{ToolName: "test", Reason: "failed"},
+			expected: false,
+		},
+		{
+			name:     "timeout error",
+			err:      context.DeadlineExceeded,
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := client.isConnectionError(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// 集成测试（需要真实的 MCP Server 运行）
+func TestClient_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("跳过集成测试")
+	}
+
+	config := Config{
+		Servers: []ServerConfig{
+			{Name: "server1", URL: "http://localhost:8080"},
+		},
+		EnableFailover: true,
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	ctx := context.Background()
+	err = client.Connect(ctx)
+	if err != nil {
+		t.Skipf("无法连接到 MCP Server: %v", err)
+	}
+	defer client.Close()
+
+	// 测试 ListTools
+	tools, err := client.ListTools(ctx)
+	require.NoError(t, err, "列出工具不应失败")
+	assert.NotEmpty(t, tools, "应该有可用的工具")
+
+	// 测试 HealthCheck
+	err = client.HealthCheck(ctx)
+	assert.NoError(t, err, "健康检查不应失败")
+
+	// 测试 GetCurrentServer
+	server := client.GetCurrentServer()
+	assert.NotNil(t, server, "应该返回当前服务器")
+	assert.Equal(t, "server1", server.Name, "服务器名称应该正确")
+}
