@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/your-org/k8s-analyzer-agent/internal/client/shell"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
 )
 
 // ShellClient Shell 客户端接口

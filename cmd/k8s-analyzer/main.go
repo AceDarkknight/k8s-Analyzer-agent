@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/your-org/k8s-analyzer-agent/internal/agent/analysis"
-	"github.com/your-org/k8s-analyzer-agent/internal/agent/safety"
-	"github.com/your-org/k8s-analyzer-agent/internal/client/k8s"
-	"github.com/your-org/k8s-analyzer-agent/internal/client/shell"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/analysis"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
 )
 
 const (

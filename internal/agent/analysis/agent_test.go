@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/your-org/k8s-analyzer-agent/internal/client/k8s"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
 )
 
 // MockSafetyAgent Mock Safety Agent，用于测试

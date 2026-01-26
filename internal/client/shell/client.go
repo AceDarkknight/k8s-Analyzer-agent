@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/your-org/k8s-analyzer-agent/internal/client"
 )
 
 // ServerConfig 定义单个 Shell Executor Server 的配置

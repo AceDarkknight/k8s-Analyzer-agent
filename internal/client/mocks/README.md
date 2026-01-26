@@ -27,7 +27,7 @@ internal/client/mocks/
 #### 基本用法
 
 ```go
-import "github.com/your-org/k8s-analyzer-agent/internal/client/mocks"
+import "github.com/AceDarkknight/k8s-analyzer-agent/internal/client/mocks"
 
 // 创建 Mock Client
 mockClient := mocks.NewMockClient()
@@ -103,7 +103,7 @@ assert.Error(t, err)
 #### 基本用法
 
 ```go
-import "github.com/your-org/k8s-analyzer-agent/internal/client/mocks"
+import "github.com/AceDarkknight/k8s-analyzer-agent/internal/client/mocks"
 
 // 创建 Mock K8s Client
 mockK8sClient := mocks.NewMockK8sClient()
@@ -138,7 +138,7 @@ assert.NoError(t, err)
 #### 基本用法
 
 ```go
-import "github.com/your-org/k8s-analyzer-agent/internal/client/mocks"
+import "github.com/AceDarkknight/k8s-analyzer-agent/internal/client/mocks"
 
 // 创建 Mock Shell Client
 mockShellClient := mocks.NewMockShellClient()

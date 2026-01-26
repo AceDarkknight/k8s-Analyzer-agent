@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/your-org/k8s-analyzer-agent/internal/client/shell"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
 )
 
 // MockShellClient 模拟 Shell 客户端

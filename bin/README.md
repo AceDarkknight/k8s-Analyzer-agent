@@ -1,10 +1,16 @@
 # bin 目录
 
-本目录用于存放 MCP Server 的二进制文件和配置文件。
+本目录用于存放项目编译后的二进制文件和配置文件。
 
 ## 文件说明
 
 ### 二进制文件
+
+- `k8s-analyzer.exe` / `k8s-analyzer` - K8s 分析 Agent 主程序
+  - 智能分析 Agent 的主入口点
+  - 集成 K8s MCP Client 和 Shell MCP Client
+  - 负责执行具体的分析任务，如 Pod 状态检查、日志分析等
+  - 依赖 `k8s_config.json` 和 `shell_config.json` 进行配置
 
 - `k8s-mcp.exe` / `k8s-mcp` - Kubernetes MCP 服务器二进制文件
   - 用于 Kubernetes 集群管理和资源查看
@@ -37,6 +43,16 @@
   - `log`: 日志配置
 
 ## 使用说明
+
+### 启动 K8s Analyzer
+
+```bash
+# Windows
+k8s-analyzer.exe
+
+# Linux/Mac
+./k8s-analyzer
+```
 
 ### 启动 K8s MCP
 

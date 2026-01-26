@@ -1,4 +1,4 @@
-module github.com/your-org/k8s-analyzer-agent
+module github.com/AceDarkknight/k8s-analyzer-agent
 
 go 1.24.3
 

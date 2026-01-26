@@ -199,5 +199,5 @@ fmt.Printf("Recommendations: %d\n", len(result.Recommendations))
 ## 依赖
 
 - `github.com/cloudwego/eino`: Eino 框架，用于 Graph 编排
-- `github.com/your-org/k8s-analyzer-agent/internal/client/k8s`: K8s 客户端
-- `github.com/your-org/k8s-analyzer-agent/internal/agent/safety`: 安全 Agent
+- `github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s`: K8s 客户端
+- `github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety`: 安全 Agent

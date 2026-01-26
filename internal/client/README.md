@@ -83,7 +83,7 @@ type MCPClient interface {
 import (
     "context"
     "log"
-    "github.com/your-org/k8s-analyzer-agent/internal/client/k8s"
+    "github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
 )
 
 func main() {
@@ -127,7 +127,7 @@ func main() {
 import (
     "context"
     "log"
-    "github.com/your-org/k8s-analyzer-agent/internal/client/shell"
+    "github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
 )
 
 func main() {
