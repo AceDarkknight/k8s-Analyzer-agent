@@ -125,6 +125,13 @@ func (c *MockClient) GetConfig() Config {
 	return c.config
 }
 
+// UpdateConfig 更新配置
+func (c *MockClient) UpdateConfig(config Config) error {
+	c.config = config
+	c.connected = false // 更新配置后断开连接
+	return nil
+}
+
 // mockListPodsJSON 模拟列出 Pod（返回 JSON）
 func (c *MockClient) mockListPodsJSON(args map[string]interface{}) string {
 	namespace := "default"

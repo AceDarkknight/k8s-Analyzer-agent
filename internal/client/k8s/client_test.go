@@ -114,8 +114,8 @@ func TestNewClient(t *testing.T) {
 			} else {
 				assert.NoError(t, err, "不应该返回错误")
 				assert.NotNil(t, client, "client 不应为 nil")
-				assert.False(t, client.connected, "初始状态应为未连接")
-				assert.Equal(t, tt.config, client.config, "配置应该正确保存")
+				assert.False(t, client.IsConnected(), "初始状态应为未连接")
+				assert.Equal(t, tt.config, client.GetConfig(), "配置应该正确保存")
 			}
 		})
 	}

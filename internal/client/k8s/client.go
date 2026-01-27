@@ -71,6 +71,7 @@ type Client interface {
 	IsConnected() bool
 	HealthCheck(ctx context.Context) error
 	GetConfig() Config
+	UpdateConfig(config Config) error
 }
 
 // CallToolResult 工具调用结果

@@ -175,8 +175,7 @@ func NewMockShellClient() *MockShellClient {
 func NewMockToolResult(text string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			{
-				Type: "text",
+			&mcp.TextContent{
 				Text: text,
 			},
 		},
@@ -196,8 +195,7 @@ func NewMockTool(name, description string, inputSchema interface{}) mcp.Tool {
 func NewMockToolWithError(error string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			{
-				Type: "text",
+			&mcp.TextContent{
 				Text: fmt.Sprintf(`{"error": "%s"}`, error),
 			},
 		},

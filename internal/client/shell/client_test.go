@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	clientpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -358,12 +359,12 @@ func TestClient_isConnectionError(t *testing.T) {
 		},
 		{
 			name:     "connection error",
-			err:      &ConnectionError{Reason: "connection failed"},
+			err:      &clientpkg.ConnectionError{Reason: "connection failed"},
 			expected: true,
 		},
 		{
 			name:     "generic error",
-			err:      &ToolExecutionError{ToolName: "test", Reason: "failed"},
+			err:      &clientpkg.ToolExecutionError{ToolName: "test", Reason: "failed"},
 			expected: false,
 		},
 		{
