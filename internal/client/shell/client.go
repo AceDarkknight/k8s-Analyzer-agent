@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -128,16 +129,21 @@ func NewClientFromFile(configPath string) (*Client, error) {
 // Connect 建立与 Shell Executor MCP Server 的连接
 func (c *Client) Connect(ctx context.Context) error {
 	if c.connected {
+		logger.Debug("Already connected to Shell MCP Server")
 		return nil // 已经连接
 	}
+
+	logger.Info("Attempting to connect to Shell MCP Server", logger.Int("serverCount", len(c.config.Servers)))
 
 	// 尝试连接到第一个可用的服务器
 	for i := 0; i < len(c.config.Servers); i++ {
 		server := c.config.Servers[i]
+		logger.Debug("Attempting to connect to server", logger.String("name", server.Name), logger.String("url", server.URL))
 
 		// 构建 SSE URL
 		sseURL, err := url.Parse(server.URL)
 		if err != nil {
+			logger.Warn("Invalid server URL", logger.String("name", server.Name), logger.Err(err))
 			continue // 跳过无效的 URL
 		}
 
@@ -165,6 +171,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		// 初始化连接
 		session, err := mcpClient.Connect(ctx, transport, &mcp.ClientSessionOptions{})
 		if err != nil {
+			logger.Warn("Failed to connect to server", logger.String("name", server.Name), logger.Err(err))
 			continue // 跳过初始化失败的客户端
 		}
 
@@ -173,10 +180,12 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.mcpSession = session
 		c.connected = true
 		c.currentIndex = i
+		logger.Info("Successfully connected to Shell MCP Server", logger.String("serverName", server.Name))
 		return nil
 	}
 
 	// 所有服务器都连接失败
+	logger.Error("Failed to connect to any Shell MCP Server")
 	return &client.ConnectionError{
 		Reason: "failed to connect to any server",
 	}
@@ -199,8 +208,11 @@ func (c *Client) Close() error {
 // CallTool 执行 Shell Executor MCP Server 上的特定工具
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]interface{}) (*mcp.CallToolResult, error) {
 	if !c.connected {
+		logger.Error("Cannot call tool: client is not connected", logger.String("tool", name))
 		return nil, &client.ConnectionError{Reason: "client is not connected"}
 	}
+
+	logger.Debug("Calling tool", logger.String("tool", name), logger.Any("args", args))
 
 	// 使用重试机制执行工具调用
 	result, err := client.RetryWithResult(
@@ -219,10 +231,13 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 	)
 
 	if err != nil {
+		logger.Error("Tool execution failed", logger.String("tool", name), logger.Err(err))
 		// 如果启用了故障转移且当前服务器不可用，尝试切换到备用服务器
 		if c.config.EnableFailover && c.isConnectionError(err) {
+			logger.Warn("Attempting failover due to connection error", logger.String("tool", name))
 			if failoverErr := c.failover(ctx); failoverErr == nil {
 				// 故障转移成功，重试工具调用
+				logger.Info("Failover successful, retrying tool call", logger.String("tool", name))
 				result, err := c.mcpSession.CallTool(ctx, &mcp.CallToolParams{
 					Name:      name,
 					Arguments: args,
@@ -230,6 +245,7 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 				if err != nil {
 					return nil, err
 				}
+				logger.Info("Tool call succeeded after failover", logger.String("tool", name))
 				return result, nil
 			}
 		}
@@ -241,23 +257,28 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 		}
 	}
 
+	logger.Debug("Tool call succeeded", logger.String("tool", name))
 	return result, nil
 }
 
 // ListTools 获取 Shell Executor MCP Server 上可用的工具列表
 func (c *Client) ListTools(ctx context.Context) ([]*mcp.Tool, error) {
 	if !c.connected {
+		logger.Error("Cannot list tools: client is not connected")
 		return nil, &client.ConnectionError{Reason: "client is not connected"}
 	}
 
+	logger.Debug("Listing available tools")
 	result, err := c.mcpSession.ListTools(ctx, &mcp.ListToolsParams{})
 	if err != nil {
+		logger.Error("Failed to list tools", logger.Err(err))
 		return nil, &client.ToolExecutionError{
 			Reason: "failed to list tools",
 			Err:    err,
 		}
 	}
 
+	logger.Debug("Successfully listed tools", logger.Int("count", len(result.Tools)))
 	return result.Tools, nil
 }
 
@@ -296,6 +317,8 @@ func (c *Client) GetCurrentServer() *ServerConfig {
 
 // failover 切换到备用服务器
 func (c *Client) failover(ctx context.Context) error {
+	logger.Info("Starting failover process", logger.Int("currentIndex", c.currentIndex))
+
 	// 关闭当前连接
 	if c.mcpSession != nil {
 		c.mcpSession.Close()
@@ -308,10 +331,12 @@ func (c *Client) failover(ctx context.Context) error {
 	for i := 1; i < len(c.config.Servers); i++ {
 		nextIndex := (c.currentIndex + i) % len(c.config.Servers)
 		server := c.config.Servers[nextIndex]
+		logger.Debug("Attempting to connect to failover server", logger.String("name", server.Name), logger.String("url", server.URL))
 
 		// 构建 SSE URL
 		sseURL, err := url.Parse(server.URL)
 		if err != nil {
+			logger.Warn("Invalid failover server URL", logger.String("name", server.Name), logger.Err(err))
 			continue
 		}
 
@@ -333,6 +358,7 @@ func (c *Client) failover(ctx context.Context) error {
 		// 初始化连接
 		session, err := mcpClient.Connect(ctx, transport, &mcp.ClientSessionOptions{})
 		if err != nil {
+			logger.Warn("Failed to connect to failover server", logger.String("name", server.Name), logger.Err(err))
 			continue
 		}
 
@@ -341,10 +367,12 @@ func (c *Client) failover(ctx context.Context) error {
 		c.mcpSession = session
 		c.connected = true
 		c.currentIndex = nextIndex
+		logger.Info("Failover successful", logger.String("serverName", server.Name))
 		return nil
 	}
 
 	// 所有服务器都连接失败
+	logger.Error("Failover failed: no available servers")
 	return &client.ConnectionError{Reason: "failover failed: no available servers"}
 }
 

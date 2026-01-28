@@ -139,7 +139,20 @@ func TestNewClient(t *testing.T) {
 				assert.NoError(t, err, "不应该返回错误")
 				assert.NotNil(t, client, "client 不应为 nil")
 				assert.False(t, client.connected, "初始状态应为未连接")
-				assert.Equal(t, tt.config, client.config, "配置应该正确保存")
+
+				// 预期配置包含默认值
+				expectedConfig := tt.config
+				if expectedConfig.Timeout == 0 {
+					expectedConfig.Timeout = 30 * time.Second
+				}
+				if expectedConfig.RetryConfig.MaxAttempts == 0 {
+					expectedConfig.RetryConfig = clientpkg.DefaultRetryConfig()
+				}
+				if expectedConfig.SSEPath == "" {
+					expectedConfig.SSEPath = "/sse"
+				}
+
+				assert.Equal(t, expectedConfig, client.config, "配置应该正确保存")
 			}
 		})
 	}
@@ -176,8 +189,17 @@ func TestClient_GetConfig(t *testing.T) {
 	client, err := NewClient(config)
 	require.NoError(t, err, "创建 client 不应失败")
 
+	// 预期配置包含默认值
+	expectedConfig := config
+	if expectedConfig.RetryConfig.MaxAttempts == 0 {
+		expectedConfig.RetryConfig = clientpkg.DefaultRetryConfig()
+	}
+	if expectedConfig.SSEPath == "" {
+		expectedConfig.SSEPath = "/sse"
+	}
+
 	returnedConfig := client.GetConfig()
-	assert.Equal(t, config, returnedConfig, "返回的配置应该与原始配置相同")
+	assert.Equal(t, expectedConfig, returnedConfig, "返回的配置应该与原始配置相同")
 }
 
 func TestClient_GetCurrentServer(t *testing.T) {
@@ -232,8 +254,20 @@ func TestClient_UpdateConfig(t *testing.T) {
 	err = client.UpdateConfig(newConfig)
 	assert.NoError(t, err, "更新配置不应失败")
 
+	// 预期配置包含默认值
+	expectedConfig := newConfig
+	if expectedConfig.Timeout == 0 {
+		expectedConfig.Timeout = 30 * time.Second
+	}
+	if expectedConfig.RetryConfig.MaxAttempts == 0 {
+		expectedConfig.RetryConfig = clientpkg.DefaultRetryConfig()
+	}
+	if expectedConfig.SSEPath == "" {
+		expectedConfig.SSEPath = "/sse"
+	}
+
 	updatedConfig := client.GetConfig()
-	assert.Equal(t, newConfig, updatedConfig, "配置应该已更新")
+	assert.Equal(t, expectedConfig, updatedConfig, "配置应该已更新")
 	assert.False(t, client.IsConnected(), "更新配置后应断开连接")
 }
 

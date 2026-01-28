@@ -4,12 +4,12 @@ package analysis
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
 // K8sClient K8s 客户端接口
@@ -27,23 +27,18 @@ type SafetyAgent interface {
 // 调用 K8s Client 获取集群/资源信息
 type InfoNode struct {
 	k8sClient K8sClient
-	logger    *log.Logger
 }
 
 // NewInfoNode 创建新的 InfoNode
-func NewInfoNode(k8sClient K8sClient, logger *log.Logger) *InfoNode {
-	if logger == nil {
-		logger = log.Default()
-	}
+func NewInfoNode(k8sClient K8sClient) *InfoNode {
 	return &InfoNode{
 		k8sClient: k8sClient,
-		logger:    logger,
 	}
 }
 
 // Execute 执行信息收集
 func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
-	n.logger.Printf("[InfoNode] Starting information collection for: %s", state.UserInput)
+	logger.Info("[InfoNode] Starting information collection", logger.String("userInput", state.UserInput))
 
 	// 根据用户输入决定收集哪些信息
 	namespace := n.extractNamespace(state.UserInput)
@@ -51,7 +46,7 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 	// 收集 Pod 信息
 	pods, err := n.collectPods(ctx, namespace)
 	if err != nil {
-		n.logger.Printf("[InfoNode] Failed to collect pods: %v", err)
+		logger.Error("[InfoNode] Failed to collect pods", logger.Err(err))
 		state.LastError = fmt.Errorf("failed to collect pods: %w", err)
 		return state, nil // 即使失败也继续，让决策节点处理
 	}
@@ -61,7 +56,7 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 	// 收集 Service 信息
 	services, err := n.collectServices(ctx, namespace)
 	if err != nil {
-		n.logger.Printf("[InfoNode] Failed to collect services: %v", err)
+		logger.Warn("[InfoNode] Failed to collect services", logger.Err(err))
 		// 不设置错误，继续执行
 	}
 	state.K8sInfo.Services = services
@@ -69,19 +64,22 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 	// 收集 Deployment 信息
 	deployments, err := n.collectDeployments(ctx, namespace)
 	if err != nil {
-		n.logger.Printf("[InfoNode] Failed to collect deployments: %v", err)
+		logger.Warn("[InfoNode] Failed to collect deployments", logger.Err(err))
 	}
 	state.K8sInfo.Deployments = deployments
 
 	// 收集事件信息
 	events, err := n.collectEvents(ctx, namespace)
 	if err != nil {
-		n.logger.Printf("[InfoNode] Failed to collect events: %v", err)
+		logger.Warn("[InfoNode] Failed to collect events", logger.Err(err))
 	}
 	state.K8sInfo.Events = events
 
-	n.logger.Printf("[InfoNode] Collected %d pods, %d services, %d deployments, %d events",
-		len(pods), len(services), len(deployments), len(events))
+	logger.Info("[InfoNode] Collected information",
+		logger.Int("pods", len(pods)),
+		logger.Int("services", len(services)),
+		logger.Int("deployments", len(deployments)),
+		logger.Int("events", len(events)))
 
 	return state, nil
 }
@@ -192,46 +190,41 @@ func (n *InfoNode) collectEvents(ctx context.Context, namespace string) ([]Event
 // DecisionNode 决策节点
 // 分析当前信息，决定下一步行动
 type DecisionNode struct {
-	llm    LLM
-	logger *log.Logger
+	llm LLM
 }
 
 // NewDecisionNode 创建新的 DecisionNode
-func NewDecisionNode(llm LLM, logger *log.Logger) *DecisionNode {
-	if logger == nil {
-		logger = log.Default()
-	}
+func NewDecisionNode(llm LLM) *DecisionNode {
 	return &DecisionNode{
-		llm:    llm,
-		logger: logger,
+		llm: llm,
 	}
 }
 
 // Execute 执行决策逻辑
 func (n *DecisionNode) Execute(ctx context.Context, state *State) (Decision, error) {
-	n.logger.Printf("[DecisionNode] Making decision (iteration %d)", state.IterationCount)
+	logger.Debug("[DecisionNode] Making decision", logger.Int("iteration", state.IterationCount))
 
 	// 检查是否达到最大迭代次数
 	if state.IterationCount >= state.MaxIterations {
-		n.logger.Printf("[DecisionNode] Max iterations reached, generating report")
+		logger.Info("[DecisionNode] Max iterations reached, generating report")
 		return DecisionReport, nil
 	}
 
 	// 调用 LLM 进行决策
 	decision, err := n.llm.MakeDecision(ctx, state)
 	if err != nil {
-		n.logger.Printf("[DecisionNode] LLM decision failed: %v", err)
+		logger.Error("[DecisionNode] LLM decision failed", logger.Err(err))
 		// 降级到规则引擎
 		return n.fallbackDecision(state), nil
 	}
 
-	n.logger.Printf("[DecisionNode] Decision: %s", decision)
+	logger.Debug("[DecisionNode] Decision made", logger.String("decision", string(decision)))
 	return decision, nil
 }
 
 // fallbackDecision 降级决策（规则引擎）
 func (n *DecisionNode) fallbackDecision(state *State) Decision {
-	n.logger.Printf("[DecisionNode] Using fallback rule-based decision")
+	logger.Debug("[DecisionNode] Using fallback rule-based decision")
 
 	// 检查是否有错误
 	if state.LastError != nil {
@@ -243,12 +236,12 @@ func (n *DecisionNode) fallbackDecision(state *State) Decision {
 	for _, pod := range state.K8sInfo.Pods {
 		if pod.Status == "Error" || pod.Status == "CrashLoopBackOff" {
 			// Pod 有问题，建议查看日志
-			n.logger.Printf("[DecisionNode] Found problematic pod: %s (status: %s)", pod.Name, pod.Status)
+			logger.Debug("[DecisionNode] Found problematic pod", logger.String("pod", pod.Name), logger.String("status", pod.Status))
 			return DecisionDeepQuery
 		}
 		if pod.Restarts > 5 {
 			// Pod 重启次数过多
-			n.logger.Printf("[DecisionNode] Pod %s has %d restarts", pod.Name, pod.Restarts)
+			logger.Debug("[DecisionNode] Pod has many restarts", logger.String("pod", pod.Name), logger.Int32("restarts", pod.Restarts))
 			return DecisionDeepQuery
 		}
 	}
@@ -256,7 +249,7 @@ func (n *DecisionNode) fallbackDecision(state *State) Decision {
 	// 检查是否有事件
 	for _, event := range state.K8sInfo.Events {
 		if event.Type == "Warning" {
-			n.logger.Printf("[DecisionNode] Found warning event: %s - %s", event.Reason, event.Message)
+			logger.Debug("[DecisionNode] Found warning event", logger.String("reason", event.Reason), logger.String("message", event.Message))
 			return DecisionDeepQuery
 		}
 	}
@@ -274,39 +267,34 @@ func (n *DecisionNode) fallbackDecision(state *State) Decision {
 // 调用 Safety Agent 执行命令
 type ActionNode struct {
 	safetyAgent SafetyAgent
-	logger      *log.Logger
 }
 
 // NewActionNode 创建新的 ActionNode
-func NewActionNode(safetyAgent SafetyAgent, logger *log.Logger) *ActionNode {
-	if logger == nil {
-		logger = log.Default()
-	}
+func NewActionNode(safetyAgent SafetyAgent) *ActionNode {
 	return &ActionNode{
 		safetyAgent: safetyAgent,
-		logger:      logger,
 	}
 }
 
 // Execute 执行命令
 func (n *ActionNode) Execute(ctx context.Context, state *State, command string) (*State, error) {
-	n.logger.Printf("[ActionNode] Executing command: %s", command)
+	logger.Info("[ActionNode] Executing command", logger.String("command", command))
 
 	// 如果命令为空，检查是否有错误
 	if command == "" {
 		if state.LastError != nil {
-			n.logger.Printf("[ActionNode] No command to execute, but there is an error: %v", state.LastError)
+			logger.Warn("[ActionNode] No command to execute, but there is an error", logger.Err(state.LastError))
 			// 保持错误状态，让决策节点处理
 			return state, nil
 		}
-		n.logger.Printf("[ActionNode] No command to execute, skipping")
+		logger.Debug("[ActionNode] No command to execute, skipping")
 		return state, nil
 	}
 
 	// 调用 Safety Agent 执行命令
 	output, err := n.safetyAgent.ExecuteSafeCommand(ctx, command)
 	if err != nil {
-		n.logger.Printf("[ActionNode] Command execution failed: %v", err)
+		logger.Error("[ActionNode] Command execution failed", logger.Err(err), logger.String("command", command))
 
 		// 检查是否是安全拒绝错误
 		if _, ok := err.(*safety.UnsafeCommandError); ok {
@@ -318,7 +306,7 @@ func (n *ActionNode) Execute(ctx context.Context, state *State, command string) 
 		return state, nil // 不返回错误，让决策节点处理
 	}
 
-	n.logger.Printf("[ActionNode] Command executed successfully")
+	logger.Info("[ActionNode] Command executed successfully", logger.String("command", command))
 	state.AddCommandExecution(command, output, true)
 	state.LastAction = command
 
@@ -359,22 +347,16 @@ func (n *ActionNode) parseCommandOutput(state *State, command, output string) {
 // ReportNode 报告生成节点
 // 汇总信息生成最终报告
 type ReportNode struct {
-	logger *log.Logger
 }
 
 // NewReportNode 创建新的 ReportNode
-func NewReportNode(logger *log.Logger) *ReportNode {
-	if logger == nil {
-		logger = log.Default()
-	}
-	return &ReportNode{
-		logger: logger,
-	}
+func NewReportNode() *ReportNode {
+	return &ReportNode{}
 }
 
 // Execute 生成报告
 func (n *ReportNode) Execute(ctx context.Context, state *State) (*State, error) {
-	n.logger.Printf("[ReportNode] Generating analysis report")
+	logger.Info("[ReportNode] Generating analysis report")
 
 	// 生成摘要
 	state.AnalysisResult.Summary = n.generateSummary(state)
@@ -392,9 +374,9 @@ func (n *ReportNode) Execute(ctx context.Context, state *State) (*State, error) 
 		state.SetStatus(StatusCompleted)
 	}
 
-	n.logger.Printf("[ReportNode] Report generated with %d findings and %d recommendations",
-		len(state.AnalysisResult.Findings),
-		len(state.AnalysisResult.Recommendations))
+	logger.Info("[ReportNode] Report generated",
+		logger.Int("findings", len(state.AnalysisResult.Findings)),
+		logger.Int("recommendations", len(state.AnalysisResult.Recommendations)))
 
 	return state, nil
 }

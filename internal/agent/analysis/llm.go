@@ -4,9 +4,10 @@ package analysis
 import (
 	"context"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
+
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
 // LLM 定义大语言模型接口
@@ -25,8 +26,7 @@ type LLM interface {
 // RuleBasedLLM 基于规则的 LLM 实现
 // 使用预定义规则进行决策，不需要真实的 LLM API
 type RuleBasedLLM struct {
-	rules  []DecisionRule
-	logger *log.Logger
+	rules []DecisionRule
 }
 
 // DecisionRule 决策规则
@@ -45,14 +45,9 @@ type DecisionRule struct {
 }
 
 // NewRuleBasedLLM 创建基于规则的 LLM
-func NewRuleBasedLLM(logger *log.Logger) *RuleBasedLLM {
-	if logger == nil {
-		logger = log.Default()
-	}
-
+func NewRuleBasedLLM() *RuleBasedLLM {
 	llm := &RuleBasedLLM{
-		logger: logger,
-		rules:  make([]DecisionRule, 0),
+		rules: make([]DecisionRule, 0),
 	}
 
 	// 初始化默认规则
@@ -147,7 +142,7 @@ func (llm *RuleBasedLLM) AddRule(rule DecisionRule) {
 
 // MakeDecision 根据当前状态做出决策
 func (llm *RuleBasedLLM) MakeDecision(ctx context.Context, state *State) (Decision, error) {
-	llm.logger.Printf("[RuleBasedLLM] Making decision for iteration %d", state.IterationCount)
+	logger.Debug("[RuleBasedLLM] Making decision", logger.Int("iteration", state.IterationCount))
 
 	// 按优先级排序规则（从小到大）
 	sortedRules := make([]DecisionRule, len(llm.rules))
@@ -165,19 +160,19 @@ func (llm *RuleBasedLLM) MakeDecision(ctx context.Context, state *State) (Decisi
 	// 按优先级匹配规则
 	for _, rule := range sortedRules {
 		if rule.Condition(state) {
-			llm.logger.Printf("[RuleBasedLLM] Rule '%s' matched, decision: %s", rule.Name, rule.Action)
+			logger.Debug("[RuleBasedLLM] Rule matched", logger.String("rule", rule.Name), logger.String("decision", string(rule.Action)))
 			return rule.Action, nil
 		}
 	}
 
 	// 默认决策
-	llm.logger.Printf("[RuleBasedLLM] No rule matched, using default decision")
+	logger.Debug("[RuleBasedLLM] No rule matched, using default decision")
 	return DecisionDeepQuery, nil
 }
 
 // Analyze 分析 K8s 信息
 func (llm *RuleBasedLLM) Analyze(ctx context.Context, state *State) (string, error) {
-	llm.logger.Printf("[RuleBasedLLM] Analyzing K8s information")
+	logger.Debug("[RuleBasedLLM] Analyzing K8s information")
 
 	var analysis strings.Builder
 
@@ -252,7 +247,7 @@ func (llm *RuleBasedLLM) Analyze(ctx context.Context, state *State) (string, err
 
 // GenerateReport 生成报告摘要
 func (llm *RuleBasedLLM) GenerateReport(ctx context.Context, state *State) (string, error) {
-	llm.logger.Printf("[RuleBasedLLM] Generating report summary")
+	logger.Debug("[RuleBasedLLM] Generating report summary")
 
 	var summary strings.Builder
 
@@ -289,22 +284,16 @@ func (llm *RuleBasedLLM) GenerateReport(ctx context.Context, state *State) (stri
 // MockLLM 模拟 LLM 实现
 // 用于测试和演示，返回预设的响应
 type MockLLM struct {
-	logger *log.Logger
 }
 
 // NewMockLLM 创建 Mock LLM
-func NewMockLLM(logger *log.Logger) *MockLLM {
-	if logger == nil {
-		logger = log.Default()
-	}
-	return &MockLLM{
-		logger: logger,
-	}
+func NewMockLLM() *MockLLM {
+	return &MockLLM{}
 }
 
 // MakeDecision 模拟决策
 func (m *MockLLM) MakeDecision(ctx context.Context, state *State) (Decision, error) {
-	m.logger.Printf("[MockLLM] Making decision for iteration %d", state.IterationCount)
+	logger.Debug("[MockLLM] Making decision", logger.Int("iteration", state.IterationCount))
 
 	// 简单的模拟逻辑
 	if state.IterationCount >= state.MaxIterations {
@@ -339,26 +328,20 @@ func (m *MockLLM) GenerateReport(ctx context.Context, state *State) (string, err
 // CommandGenerator 命令生成器
 // 根据当前状态生成要执行的命令
 type CommandGenerator struct {
-	logger *log.Logger
 }
 
 // NewCommandGenerator 创建命令生成器
-func NewCommandGenerator(logger *log.Logger) *CommandGenerator {
-	if logger == nil {
-		logger = log.Default()
-	}
-	return &CommandGenerator{
-		logger: logger,
-	}
+func NewCommandGenerator() *CommandGenerator {
+	return &CommandGenerator{}
 }
 
 // GenerateCommand 生成命令
 func (g *CommandGenerator) GenerateCommand(state *State) (string, error) {
-	g.logger.Printf("[CommandGenerator] Generating command for iteration %d", state.IterationCount)
+	logger.Debug("[CommandGenerator] Generating command", logger.Int("iteration", state.IterationCount))
 
 	// 检查是否已经执行了命令，避免重复
 	if len(state.AnalysisResult.ExecutedCommands) > 0 {
-		g.logger.Printf("[CommandGenerator] Already executed %d commands, skipping", len(state.AnalysisResult.ExecutedCommands))
+		logger.Debug("[CommandGenerator] Already executed commands, skipping", logger.Int("count", len(state.AnalysisResult.ExecutedCommands)))
 		return "", fmt.Errorf("already executed commands, skipping")
 	}
 
@@ -367,13 +350,13 @@ func (g *CommandGenerator) GenerateCommand(state *State) (string, error) {
 		if pod.Status == "Error" || pod.Status == "CrashLoopBackOff" {
 			// 生成查看日志的命令
 			cmd := fmt.Sprintf("kubectl logs %s -n %s", pod.Name, pod.Namespace)
-			g.logger.Printf("[CommandGenerator] Generated command: %s", cmd)
+			logger.Debug("[CommandGenerator] Generated command", logger.String("command", cmd))
 			return cmd, nil
 		}
 		if pod.Restarts > 3 {
 			// Pod 重启次数过多，查看日志
 			cmd := fmt.Sprintf("kubectl logs %s -n %s --previous", pod.Name, pod.Namespace)
-			g.logger.Printf("[CommandGenerator] Generated command: %s", cmd)
+			logger.Debug("[CommandGenerator] Generated command", logger.String("command", cmd))
 			return cmd, nil
 		}
 	}
@@ -383,7 +366,7 @@ func (g *CommandGenerator) GenerateCommand(state *State) (string, error) {
 		svc := state.K8sInfo.Services[0]
 		if svc.ClusterIP != "" {
 			cmd := fmt.Sprintf("curl -I http://%s:%d", svc.ClusterIP, 80)
-			g.logger.Printf("[CommandGenerator] Generated command: %s", cmd)
+			logger.Debug("[CommandGenerator] Generated command", logger.String("command", cmd))
 			return cmd, nil
 		}
 	}
@@ -392,13 +375,13 @@ func (g *CommandGenerator) GenerateCommand(state *State) (string, error) {
 	if len(state.K8sInfo.Pods) > 0 {
 		pod := state.K8sInfo.Pods[0]
 		cmd := fmt.Sprintf("kubectl describe pod %s -n %s", pod.Name, pod.Namespace)
-		g.logger.Printf("[CommandGenerator] Generated command: %s", cmd)
+		logger.Debug("[CommandGenerator] Generated command", logger.String("command", cmd))
 		return cmd, nil
 	}
 
 	// 如果没有足够信息，返回一个默认命令
 	cmd := "kubectl get pods -A"
-	g.logger.Printf("[CommandGenerator] Generated default command: %s", cmd)
+	logger.Debug("[CommandGenerator] Generated default command", logger.String("command", cmd))
 	return cmd, nil
 }
 

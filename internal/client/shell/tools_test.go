@@ -42,12 +42,12 @@ func TestExecuteResult_GetSuccessfulNodes(t *testing.T) {
 					{Status: "failed", Nodes: []string{"node1", "node2"}},
 				},
 			},
-			expected: []string{},
+			expected: []string(nil),
 		},
 		{
 			name:     "empty groups",
 			result:   ExecuteResult{Groups: []ExecuteGroup{}},
-			expected: []string{},
+			expected: []string(nil),
 		},
 	}
 
@@ -92,12 +92,12 @@ func TestExecuteResult_GetFailedNodes(t *testing.T) {
 					{Status: "success", Nodes: []string{"node1", "node2"}},
 				},
 			},
-			expected: []string{},
+			expected: []string(nil),
 		},
 		{
 			name:     "empty groups",
 			result:   ExecuteResult{Groups: []ExecuteGroup{}},
-			expected: []string{},
+			expected: []string(nil),
 		},
 	}
 

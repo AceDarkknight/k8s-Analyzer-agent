@@ -4,8 +4,8 @@ package analysis
 import (
 	"context"
 	"fmt"
-	"log"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/cloudwego/eino/compose"
 )
 
@@ -26,23 +26,17 @@ type Agent struct {
 	k8sClient   K8sClient
 	safetyAgent SafetyAgent
 	llm         LLM
-	logger      *log.Logger
 }
 
 // NewAgent 创建新的 Analysis Agent
-func NewAgent(k8sClient K8sClient, safetyAgent SafetyAgent, logger *log.Logger) (*Agent, error) {
-	if logger == nil {
-		logger = log.Default()
-	}
-
+func NewAgent(k8sClient K8sClient, safetyAgent SafetyAgent) (*Agent, error) {
 	// 创建基于规则的 LLM（默认）
-	llm := NewRuleBasedLLM(logger)
+	llm := NewRuleBasedLLM()
 
 	agent := &Agent{
 		k8sClient:   k8sClient,
 		safetyAgent: safetyAgent,
 		llm:         llm,
-		logger:      logger,
 	}
 
 	// 构建 Graph
@@ -50,21 +44,16 @@ func NewAgent(k8sClient K8sClient, safetyAgent SafetyAgent, logger *log.Logger) 
 		return nil, fmt.Errorf("failed to build graph: %w", err)
 	}
 
-	logger.Printf("[Agent] Analysis Agent initialized successfully")
+	logger.Info("Analysis Agent initialized successfully")
 	return agent, nil
 }
 
 // NewAgentWithLLM 使用自定义 LLM 创建 Agent
-func NewAgentWithLLM(k8sClient K8sClient, safetyAgent SafetyAgent, llm LLM, logger *log.Logger) (*Agent, error) {
-	if logger == nil {
-		logger = log.Default()
-	}
-
+func NewAgentWithLLM(k8sClient K8sClient, safetyAgent SafetyAgent, llm LLM) (*Agent, error) {
 	agent := &Agent{
 		k8sClient:   k8sClient,
 		safetyAgent: safetyAgent,
 		llm:         llm,
-		logger:      logger,
 	}
 
 	// 构建 Graph
@@ -72,28 +61,28 @@ func NewAgentWithLLM(k8sClient K8sClient, safetyAgent SafetyAgent, llm LLM, logg
 		return nil, fmt.Errorf("failed to build graph: %w", err)
 	}
 
-	logger.Printf("[Agent] Analysis Agent initialized successfully")
+	logger.Info("Analysis Agent initialized successfully")
 	return agent, nil
 }
 
 // buildGraph 构建 Eino Graph
 func (a *Agent) buildGraph() error {
-	a.logger.Printf("[Agent] Building graph...")
+	logger.Info("Building graph...")
 
 	// 创建 Graph
 	g := compose.NewGraph[*State, *AnalysisResult]()
 
 	// 创建节点
-	infoNode := NewInfoNode(a.k8sClient, a.logger)
-	decisionNode := NewDecisionNode(a.llm, a.logger)
-	actionNode := NewActionNode(a.safetyAgent, a.logger)
-	reportNode := NewReportNode(a.logger)
-	commandGenerator := NewCommandGenerator(a.logger)
+	infoNode := NewInfoNode(a.k8sClient)
+	decisionNode := NewDecisionNode(a.llm)
+	actionNode := NewActionNode(a.safetyAgent)
+	reportNode := NewReportNode()
+	commandGenerator := NewCommandGenerator()
 
 	// 添加 Info 节点
 	if err := g.AddLambdaNode(NodeInfo, compose.InvokableLambda(
 		func(ctx context.Context, state *State) (*State, error) {
-			a.logger.Printf("[Graph] Executing InfoNode")
+			logger.Debug("Executing InfoNode", logger.Int("iteration", state.IterationCount))
 			return infoNode.Execute(ctx, state)
 		},
 	)); err != nil {
@@ -103,7 +92,7 @@ func (a *Agent) buildGraph() error {
 	// 添加 Decision 节点
 	if err := g.AddLambdaNode(NodeDecision, compose.InvokableLambda(
 		func(ctx context.Context, state *State) (*State, error) {
-			a.logger.Printf("[Graph] Executing DecisionNode")
+			logger.Debug("Executing DecisionNode", logger.Int("iteration", state.IterationCount))
 			decision, err := decisionNode.Execute(ctx, state)
 			if err != nil {
 				state.LastError = err
@@ -112,6 +101,7 @@ func (a *Agent) buildGraph() error {
 
 			// 将决策结果存储在状态中
 			state.LastAction = string(decision)
+			logger.Debug("Decision made", logger.String("action", string(decision)))
 			return state, nil
 		},
 	)); err != nil {
@@ -121,12 +111,12 @@ func (a *Agent) buildGraph() error {
 	// 添加 Action 节点
 	if err := g.AddLambdaNode(NodeAction, compose.InvokableLambda(
 		func(ctx context.Context, state *State) (*State, error) {
-			a.logger.Printf("[Graph] Executing ActionNode")
+			logger.Debug("Executing ActionNode", logger.Int("iteration", state.IterationCount))
 
 			// 生成要执行的命令
 			command, err := commandGenerator.GenerateCommand(state)
 			if err != nil {
-				a.logger.Printf("[Graph] Failed to generate command: %v", err)
+				logger.Error("Failed to generate command", logger.Err(err))
 				// 设置错误状态，让决策节点处理
 				state.LastError = err
 				return state, nil
@@ -142,7 +132,7 @@ func (a *Agent) buildGraph() error {
 	// 添加 Report 节点
 	if err := g.AddLambdaNode(NodeReport, compose.InvokableLambda(
 		func(ctx context.Context, state *State) (*AnalysisResult, error) {
-			a.logger.Printf("[Graph] Executing ReportNode")
+			logger.Info("Executing ReportNode", logger.Int("iteration", state.IterationCount))
 			// 先执行 ReportNode 生成报告
 			_, err := reportNode.Execute(ctx, state)
 			if err != nil {
@@ -170,7 +160,7 @@ func (a *Agent) buildGraph() error {
 	if err := g.AddBranch(NodeDecision, compose.NewGraphBranch(
 		func(ctx context.Context, state *State) (string, error) {
 			decision := Decision(state.LastAction)
-			a.logger.Printf("[Graph] Branch from Decision: %s", decision)
+			logger.Debug("Branch from Decision", logger.String("decision", string(decision)))
 
 			switch decision {
 			case DecisionContinue, DecisionDeepQuery:
@@ -208,13 +198,13 @@ func (a *Agent) buildGraph() error {
 	}
 
 	a.graph = compiledGraph
-	a.logger.Printf("[Agent] Graph built and compiled successfully")
+	logger.Info("Graph built and compiled successfully")
 	return nil
 }
 
 // Run 执行分析任务
 func (a *Agent) Run(ctx context.Context, userInput string) (*AnalysisResult, error) {
-	a.logger.Printf("[Agent] Starting analysis for: %s", userInput)
+	logger.Info("Starting analysis", logger.String("userInput", userInput))
 
 	// 创建初始状态
 	state := NewState(userInput)
@@ -222,22 +212,23 @@ func (a *Agent) Run(ctx context.Context, userInput string) (*AnalysisResult, err
 	// 执行 Graph
 	result, err := a.graph.Invoke(ctx, state)
 	if err != nil {
-		a.logger.Printf("[Agent] Graph execution failed: %v", err)
+		logger.Error("Graph execution failed", logger.Err(err))
 		return nil, fmt.Errorf("graph execution failed: %w", err)
 	}
 
 	// 返回分析结果
+	logger.Info("Analysis completed successfully", logger.Int("iterations", state.IterationCount))
 	return result, nil
 }
 
 // RunWithState 使用指定状态执行分析任务
 func (a *Agent) RunWithState(ctx context.Context, state *State) (*AnalysisResult, error) {
-	a.logger.Printf("[Agent] Running with state (iteration %d)", state.IterationCount)
+	logger.Debug("Running with state", logger.Int("iteration", state.IterationCount))
 
 	// 执行 Graph
 	result, err := a.graph.Invoke(ctx, state)
 	if err != nil {
-		a.logger.Printf("[Agent] Graph execution failed: %v", err)
+		logger.Error("Graph execution failed", logger.Err(err))
 		return nil, fmt.Errorf("graph execution failed: %w", err)
 	}
 
@@ -268,5 +259,5 @@ func (a *Agent) GetLLM() LLM {
 // SetLLM 设置 LLM
 func (a *Agent) SetLLM(llm LLM) {
 	a.llm = llm
-	a.logger.Printf("[Agent] LLM updated")
+	logger.Info("LLM updated")
 }

@@ -43,8 +43,14 @@ func NewMockClientFromFile(configPath string) (*MockClient, error) {
 
 // Connect 建立与 K8s MCP Server 的连接（模拟）
 func (c *MockClient) Connect(ctx context.Context) error {
-	c.connected = true
-	return nil
+	// 模拟连接延迟
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(10 * time.Millisecond):
+		c.connected = true
+		return nil
+	}
 }
 
 // Close 终止与 K8s MCP Server 的连接（模拟）
@@ -83,6 +89,10 @@ func (c *MockClient) CallTool(ctx context.Context, name string, args map[string]
 
 // ListTools 获取 K8s MCP Server 上可用的工具列表（模拟）
 func (c *MockClient) ListTools(ctx context.Context) ([]Tool, error) {
+	if !c.connected {
+		return nil, &ConnectionError{Reason: "client is not connected"}
+	}
+
 	return []Tool{
 		{
 			Name:        "list_pods",
@@ -127,6 +137,9 @@ func (c *MockClient) GetConfig() Config {
 
 // UpdateConfig 更新配置
 func (c *MockClient) UpdateConfig(config Config) error {
+	if err := config.Validate(); err != nil {
+		return err
+	}
 	c.config = config
 	c.connected = false // 更新配置后断开连接
 	return nil

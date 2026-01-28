@@ -4,9 +4,9 @@ package safety
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
 // ShellClient Shell 客户端接口
@@ -18,7 +18,6 @@ type ShellClient interface {
 type Agent struct {
 	validator *Validator
 	client    ShellClient
-	logger    *log.Logger
 }
 
 // NewAgent 创建新的 Safety Agent
@@ -32,7 +31,6 @@ func NewAgent(client ShellClient, configPath string) (*Agent, error) {
 	return &Agent{
 		validator: validator,
 		client:    client,
-		logger:    log.Default(),
 	}, nil
 }
 
@@ -41,62 +39,46 @@ func NewAgentWithValidator(client ShellClient, validator *Validator) *Agent {
 	return &Agent{
 		validator: validator,
 		client:    client,
-		logger:    log.Default(),
 	}
-}
-
-// NewAgentWithLogger 创建带自定义日志的 Safety Agent
-func NewAgentWithLogger(client ShellClient, configPath string, logger *log.Logger) (*Agent, error) {
-	// 创建验证器
-	validator, err := NewValidator(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create validator: %w", err)
-	}
-
-	return &Agent{
-		validator: validator,
-		client:    client,
-		logger:    logger,
-	}, nil
 }
 
 // ExecuteSafeCommand 安全执行命令
 // 如果命令通过安全验证，则执行并返回输出
 // 如果命令不安全，返回 UnsafeCommandError
 func (a *Agent) ExecuteSafeCommand(ctx context.Context, command string) (string, error) {
-	// 1. 验证命令安全性
+	//1. 验证命令安全性
 	if err := a.validator.ValidateCommand(command); err != nil {
-		a.logger.Printf("[Safety] Command rejected: %s - %v", command, err)
+		logger.Warn("[Safety] Command rejected", logger.String("command", command), logger.Err(err))
 		return "", err
 	}
 
-	a.logger.Printf("[Safety] Command approved: %s", command)
+	logger.Info("[Safety] Command approved", logger.String("command", command))
 
-	// 2. 执行命令
+	//2. 执行命令
 	result, err := a.client.ExecuteCommand(ctx, command)
 	if err != nil {
-		a.logger.Printf("[Safety] Command execution failed: %s - %v", command, err)
+		logger.Error("[Safety] Command execution failed", logger.String("command", command), logger.Err(err))
 		return "", fmt.Errorf("failed to execute command: %w", err)
 	}
 
-	// 3. 格式化输出
+	//3. 格式化输出
 	output := a.formatOutput(result)
-	a.logger.Printf("[Safety] Command executed successfully: %s", command)
+	logger.Info("[Safety] Command executed successfully", logger.String("command", command))
 
 	return output, nil
 }
 
 // ExecuteSafeCommandWithTimeout 安全执行命令（带超时）
 func (a *Agent) ExecuteSafeCommandWithTimeout(ctx context.Context, command string, timeout int) (string, error) {
-	// 1. 验证命令安全性
+	//1. 验证命令安全性
 	if err := a.validator.ValidateCommand(command); err != nil {
-		a.logger.Printf("[Safety] Command rejected: %s - %v", command, err)
+		logger.Warn("[Safety] Command rejected", logger.String("command", command), logger.Err(err))
 		return "", err
 	}
 
-	a.logger.Printf("[Safety] Command approved: %s", command)
+	logger.Info("[Safety] Command approved", logger.String("command", command))
 
-	// 2. 执行命令（带超时）
+	//2. 执行命令（带超时）
 	var result *shell.ExecuteResult
 	var err error
 
@@ -115,13 +97,13 @@ func (a *Agent) ExecuteSafeCommandWithTimeout(ctx context.Context, command strin
 	}
 
 	if err != nil {
-		a.logger.Printf("[Safety] Command execution failed: %s - %v", command, err)
+		logger.Error("[Safety] Command execution failed", logger.String("command", command), logger.Err(err))
 		return "", fmt.Errorf("failed to execute command: %w", err)
 	}
 
-	// 3. 格式化输出
+	//3. 格式化输出
 	output := a.formatOutput(result)
-	a.logger.Printf("[Safety] Command executed successfully: %s", command)
+	logger.Info("[Safety] Command executed successfully", logger.String("command", command))
 
 	return output, nil
 }

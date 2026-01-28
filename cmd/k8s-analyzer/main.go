@@ -5,15 +5,17 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/analysis"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
 const (
@@ -23,109 +25,122 @@ const (
 )
 
 func main() {
-	logger := log.New(os.Stdout, "[K8s-Analyzer] ", log.LstdFlags|log.Lshortfile)
-	logger.Println("=== K8s Analyzer Agent 集成测试与验收 ===")
+	// 初始化日志系统
+	if err := logger.InitWithConfig(logger.NewDefaultConfig()); err != nil {
+		fmt.Printf("日志初始化失败: %v\n", err)
+		os.Exit(1)
+	}
+	defer logger.Sync()
+
+	logger.Info("=== K8s Analyzer Agent 集成测试与验收 ===")
 
 	ctx := context.Background()
 
+	// 设置优雅退出
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		logger.Info("接收到退出信号，正在关闭...")
+		logger.Sync()
+		os.Exit(0)
+	}()
+
 	// 1. 读取配置文件
-	logger.Println("步骤 1: 读取配置文件...")
+	logger.Info("步骤 1: 读取配置文件...")
 	k8sConfigPath, err := getConfigPath(defaultK8sConfigPath)
 	if err != nil {
-		logger.Printf("警告: 无法获取 K8s 配置路径: %v，使用默认配置", err)
+		logger.Warn("无法获取 K8s 配置路径，使用默认配置", logger.Err(err))
 	}
 	shellConfigPath, err := getConfigPath(defaultShellConfigPath)
 	if err != nil {
-		logger.Printf("警告: 无法获取 Shell 配置路径: %v，使用默认配置", err)
+		logger.Warn("无法获取 Shell 配置路径，使用默认配置", logger.Err(err))
 	}
 
 	// 2. 初始化 K8s Client
-	logger.Println("步骤 2: 初始化 K8s Client...")
+	logger.Info("步骤 2: 初始化 K8s Client...")
 	k8sClient, err := k8s.NewClientFromFile(k8sConfigPath)
 	if err != nil {
-		logger.Printf("K8s Client 初始化失败: %v", err)
+		logger.Error("K8s Client 初始化失败", logger.Err(err))
 	} else {
-		logger.Println("K8s Client 初始化成功")
+		logger.Info("K8s Client 初始化成功")
 	}
 
 	// 3. 初始化 Shell Client
-	logger.Println("步骤 3: 初始化 Shell Client...")
+	logger.Info("步骤 3: 初始化 Shell Client...")
 	shellClient, err := shell.NewClientFromFile(shellConfigPath)
 	if err != nil {
-		logger.Printf("Shell Client 初始化失败: %v", err)
+		logger.Error("Shell Client 初始化失败", logger.Err(err))
 	} else {
-		logger.Println("Shell Client 初始化成功")
+		logger.Info("Shell Client 初始化成功")
 	}
 
 	// 如果 Shell Client 初始化失败，无法继续
 	if shellClient == nil {
-		logger.Println("错误: Shell Client 未初始化，无法继续")
-		os.Exit(1)
+		logger.Fatal("Shell Client 未初始化，无法继续")
 	}
 
 	// 4. 初始化 Safety Agent
-	logger.Println("步骤 4: 初始化 Safety Agent...")
+	logger.Info("步骤 4: 初始化 Safety Agent...")
 	safetyAgent, err := safety.NewAgent(shellClient, shellConfigPath)
 	if err != nil {
-		logger.Printf("Safety Agent 初始化失败: %v", err)
-		os.Exit(1)
+		logger.Fatal("Safety Agent 初始化失败", logger.Err(err))
 	}
-	logger.Println("Safety Agent 初始化成功")
+	logger.Info("Safety Agent 初始化成功")
 
 	// 5. 初始化 Analysis Agent
-	logger.Println("步骤 5: 初始化 Analysis Agent...")
-	analysisAgent, err := analysis.NewAgent(k8sClient, safetyAgent, logger)
+	logger.Info("步骤 5: 初始化 Analysis Agent...")
+	analysisAgent, err := analysis.NewAgent(k8sClient, safetyAgent)
 	if err != nil {
-		logger.Printf("Analysis Agent 初始化失败: %v", err)
-		os.Exit(1)
+		logger.Fatal("Analysis Agent 初始化失败", logger.Err(err))
 	}
-	logger.Println("Analysis Agent 初始化成功")
+	logger.Info("Analysis Agent 初始化成功")
 
 	// 6. 尝试连接 K8s Client（预期会失败，因为没有真实的 MCP Server）
-	logger.Println("步骤 6: 尝试连接 K8s Client...")
+	logger.Info("步骤 6: 尝试连接 K8s Client...")
 	if k8sClient != nil {
 		if err := k8sClient.Connect(ctx); err != nil {
-			logger.Printf("K8s Client 连接失败 (预期行为): %v", err)
+			logger.Warn("K8s Client 连接失败 (预期行为)", logger.Err(err))
 		} else {
-			logger.Println("K8s Client 连接成功")
+			logger.Info("K8s Client 连接成功")
 		}
 		defer func() {
 			if err := k8sClient.Close(); err != nil {
-				logger.Printf("K8s Client 关闭失败: %v", err)
+				logger.Error("K8s Client 关闭失败", logger.Err(err))
 			}
 		}()
 	}
 
 	// 7. 尝试连接 Shell Client（预期会失败，因为没有真实的 MCP Server）
-	logger.Println("步骤 7: 尝试连接 Shell Client...")
+	logger.Info("步骤 7: 尝试连接 Shell Client...")
 	if err := shellClient.Connect(ctx); err != nil {
-		logger.Printf("Shell Client 连接失败 (预期行为): %v", err)
-		logger.Println("注意: 这是因为没有真实的 MCP Server 运行")
+		logger.Warn("Shell Client 连接失败 (预期行为)", logger.Err(err))
+		logger.Info("注意: 这是因为没有真实的 MCP Server 运行")
 	} else {
-		logger.Println("Shell Client 连接成功")
+		logger.Info("Shell Client 连接成功")
 	}
 	defer func() {
 		if err := shellClient.Close(); err != nil {
-			logger.Printf("Shell Client 关闭失败: %v", err)
+			logger.Error("Shell Client 关闭失败", logger.Err(err))
 		}
 	}()
 
 	// 8. 启动 Agent 并传入示例参数
-	logger.Println("步骤 8: 启动 Analysis Agent 进行分析...")
+	logger.Info("步骤 8: 启动 Analysis Agent 进行分析...")
 	userInput := "分析 default 命名空间中的 Pod 状态"
-	logger.Printf("用户输入: %s", userInput)
+	logger.Info("用户输入", logger.String("input", userInput))
 
 	result, err := analysisAgent.Run(ctx, userInput)
 	if err != nil {
-		logger.Printf("Analysis Agent 执行失败: %v", err)
+		logger.Error("Analysis Agent 执行失败", logger.Err(err))
 		// 不退出，继续打印部分结果
 	}
 
 	// 9. 打印最终报告
-	logger.Println("步骤 9: 打印分析报告...")
-	printReport(result, logger)
+	logger.Info("步骤 9: 打印分析报告...")
+	printReport(result)
 
-	logger.Println("=== 集成测试与验收完成 ===")
+	logger.Info("=== 集成测试与验收完成 ===")
 }
 
 // getConfigPath 获取配置文件的绝对路径
@@ -145,9 +160,9 @@ func getConfigPath(defaultPath string) (string, error) {
 }
 
 // printReport 打印分析报告
-func printReport(result *analysis.AnalysisResult, logger *log.Logger) {
+func printReport(result *analysis.AnalysisResult) {
 	if result == nil {
-		logger.Println("无分析结果")
+		fmt.Println("无分析结果")
 		return
 	}
 
