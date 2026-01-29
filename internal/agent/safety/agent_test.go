@@ -37,7 +37,7 @@ func TestValidator_Whitelist(t *testing.T) {
 		CommandWhitelist: []string{"ls", "cat", "kubectl"},
 	}
 
-	validator, err := NewValidatorWithConfig(config)
+	validator, err := NewValidatorWithConfig(config, nil)
 	if err != nil {
 		t.Fatalf("Failed to create validator: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestValidator_Blacklist(t *testing.T) {
 		BlacklistedCommands: []string{"rm", "mkfs", "shutdown"},
 	}
 
-	validator, err := NewValidatorWithConfig(config)
+	validator, err := NewValidatorWithConfig(config, nil)
 	if err != nil {
 		t.Fatalf("Failed to create validator: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestValidator_DangerousPatterns(t *testing.T) {
 		},
 	}
 
-	validator, err := NewValidatorWithConfig(config)
+	validator, err := NewValidatorWithConfig(config, nil)
 	if err != nil {
 		t.Fatalf("Failed to create validator: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestValidator_ComplexScenarios(t *testing.T) {
 		},
 	}
 
-	validator, err := NewValidatorWithConfig(config)
+	validator, err := NewValidatorWithConfig(config, nil)
 	if err != nil {
 		t.Fatalf("Failed to create validator: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestAgent_ExecuteSafeCommand(t *testing.T) {
 		},
 	}
 
-	validator, err := NewValidatorWithConfig(config)
+	validator, err := NewValidatorWithConfig(config, nil)
 	if err != nil {
 		t.Fatalf("Failed to create validator: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestAgent_ExecuteSafeCommandWithClientError(t *testing.T) {
 		CommandWhitelist: []string{"ls"},
 	}
 
-	validator, err := NewValidatorWithConfig(config)
+	validator, err := NewValidatorWithConfig(config, nil)
 	if err != nil {
 		t.Fatalf("Failed to create validator: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestUnsafeCommandError(t *testing.T) {
 // TestValidator_ExtractCommandName 测试命令名称提取
 func TestValidator_ExtractCommandName(t *testing.T) {
 	config := &SecurityConfig{}
-	validator, err := NewValidatorWithConfig(config)
+	validator, err := NewValidatorWithConfig(config, nil)
 	if err != nil {
 		t.Fatalf("Failed to create validator: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestValidator_EmptyWhitelist(t *testing.T) {
 		BlacklistedCommands: []string{"rm"},
 	}
 
-	validator, err := NewValidatorWithConfig(config)
+	validator, err := NewValidatorWithConfig(config, nil)
 	if err != nil {
 		t.Fatalf("Failed to create validator: %v", err)
 	}

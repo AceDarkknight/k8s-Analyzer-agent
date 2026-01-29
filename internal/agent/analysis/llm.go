@@ -251,7 +251,7 @@ func (llm *RuleBasedLLM) GenerateReport(ctx context.Context, state *State) (stri
 
 	var summary strings.Builder
 
-	summary.WriteString(fmt.Sprintf("## 分析摘要\n\n"))
+	summary.WriteString("## 分析摘要\n\n")
 	summary.WriteString(fmt.Sprintf("**用户查询**: %s\n\n", state.UserInput))
 	summary.WriteString(fmt.Sprintf("**命名空间**: %s\n\n", state.K8sInfo.Namespace))
 	summary.WriteString(fmt.Sprintf("**迭代次数**: %d/%d\n\n", state.IterationCount, state.MaxIterations))

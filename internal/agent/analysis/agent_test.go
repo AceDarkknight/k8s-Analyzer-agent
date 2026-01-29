@@ -27,6 +27,12 @@ func (m *MockSafetyAgent) ExecuteSafeCommand(ctx context.Context, command string
 	return "Mock output for command: " + command, nil
 }
 
+// ExecuteSafeCommandWithAudit 模拟带审计的安全执行命令
+func (m *MockSafetyAgent) ExecuteSafeCommandWithAudit(ctx context.Context, command string, contextInfo map[string]interface{}) (string, error) {
+	m.commands = append(m.commands, command)
+	return "Mock audit output for command: " + command, nil
+}
+
 // GetCommands 获取已执行的命令
 func (m *MockSafetyAgent) GetCommands() []string {
 	return m.commands

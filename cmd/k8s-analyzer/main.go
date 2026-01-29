@@ -82,7 +82,9 @@ func main() {
 
 	// 4. 初始化 Safety Agent
 	logger.Info("步骤 4: 初始化 Safety Agent...")
-	safetyAgent, err := safety.NewAgent(shellClient, shellConfigPath)
+	// 创建 LLM 审计器（使用基于规则的审计器）
+	llmAuditor := safety.NewRuleBasedAuditor()
+	safetyAgent, err := safety.NewAgent(shellClient, shellConfigPath, llmAuditor)
 	if err != nil {
 		logger.Fatal("Safety Agent 初始化失败", logger.Err(err))
 	}

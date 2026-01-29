@@ -21,6 +21,7 @@ type K8sClient interface {
 // SafetyAgent 安全 Agent 接口
 type SafetyAgent interface {
 	ExecuteSafeCommand(ctx context.Context, command string) (string, error)
+	ExecuteSafeCommandWithAudit(ctx context.Context, command string, contextInfo map[string]interface{}) (string, error)
 }
 
 // InfoNode 信息收集节点
@@ -385,7 +386,7 @@ func (n *ReportNode) Execute(ctx context.Context, state *State) (*State, error) 
 func (n *ReportNode) generateSummary(state *State) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("## 分析报告\n\n"))
+	sb.WriteString("## 分析报告\n\n")
 	sb.WriteString(fmt.Sprintf("**用户查询**: %s\n\n", state.UserInput))
 	sb.WriteString(fmt.Sprintf("**命名空间**: %s\n\n", state.K8sInfo.Namespace))
 	sb.WriteString(fmt.Sprintf("**迭代次数**: %d/%d\n\n", state.IterationCount, state.MaxIterations))
