@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/AceDarkknight/k8s-mcp/pkg/mcpclient"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Config 定义 K8s MCP Client 的配置
@@ -142,15 +145,9 @@ func (e *ToolExecutionError) Unwrap() error {
 }
 
 // NewClient 创建新的 K8s MCP Client
-// 注意：当前版本使用 MockClient 实现
+// 使用 RealClient 实现
 func NewClient(config Config) (Client, error) {
-	// 验证配置
-	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
-	}
-
-	// 返回 MockClient
-	return NewMockClient(config), nil
+	return NewRealClient(config)
 }
 
 // NewClientFromFile 从配置文件创建 K8s MCP Client
@@ -172,12 +169,145 @@ func NewClientFromFile(configPath string) (Client, error) {
 }
 
 // NewRealClient 创建真实的 K8s MCP Client
-// TODO: 实现真实的 MCP 连接逻辑
+// 使用 k8s-mcp/pkg/mcpclient 提供的客户端实现
 func NewRealClient(config Config) (Client, error) {
-	_ = config
-	// TODO: 实现真实的 MCP 连接逻辑
-	// 当前返回 MockClient 作为占位符
-	return NewMockClient(config), nil
+	// 验证配置
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
+	// 创建 mcpclient.Config
+	mcpConfig := mcpclient.Config{
+		ServerURL:          config.ServerURL,
+		AuthToken:          config.Token,
+		InsecureSkipVerify: config.Insecure,
+		UserAgent:          "k8s-analyzer-agent/1.0.0",
+	}
+
+	// 创建 mcpclient.Client
+	mcpClient, err := mcpclient.NewClient(mcpConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create mcp client: %w", err)
+	}
+
+	// 创建 RealClient
+	return &RealClient{
+		config:    config,
+		mcpClient: mcpClient,
+		connected: false,
+	}, nil
+}
+
+// RealClient 真实的 K8s MCP Client 实现
+type RealClient struct {
+	config    Config
+	mcpClient *mcpclient.Client
+	connected bool
+}
+
+// Connect 建立连接
+func (c *RealClient) Connect(ctx context.Context) error {
+	if err := c.mcpClient.Connect(ctx); err != nil {
+		return &ConnectionError{
+			Reason: "failed to connect to MCP server",
+			Err:    err,
+		}
+	}
+	c.connected = true
+	return nil
+}
+
+// Close 关闭连接
+func (c *RealClient) Close() error {
+	c.connected = false
+	return c.mcpClient.Close()
+}
+
+// CallTool 调用工具
+func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error) {
+	if !c.connected {
+		return nil, &ToolExecutionError{
+			ToolName: name,
+			Reason:   "client not connected",
+		}
+	}
+
+	result, err := c.mcpClient.CallTool(ctx, name, args)
+	if err != nil {
+		return nil, &ToolExecutionError{
+			ToolName: name,
+			Reason:   "failed to call tool",
+			Err:      err,
+		}
+	}
+
+	// 转换 mcp.CallToolResult 为 CallToolResult
+	callToolResult := &CallToolResult{
+		Content: convertContent(result.Content),
+	}
+
+	return callToolResult, nil
+}
+
+// ListTools 获取工具列表
+func (c *RealClient) ListTools(ctx context.Context) ([]Tool, error) {
+	if !c.connected {
+		return nil, fmt.Errorf("client not connected")
+	}
+
+	tools, err := c.mcpClient.ListTools(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tools: %w", err)
+	}
+
+	// 转换 mcp.Tool 为 Tool
+	result := make([]Tool, 0, len(tools))
+	for _, tool := range tools {
+		result = append(result, Tool{
+			Name:        tool.Name,
+			Description: tool.Description,
+		})
+	}
+
+	return result, nil
+}
+
+// IsConnected 检查是否已连接
+func (c *RealClient) IsConnected() bool {
+	return c.connected
+}
+
+// HealthCheck 健康检查
+func (c *RealClient) HealthCheck(ctx context.Context) error {
+	if !c.connected {
+		return fmt.Errorf("client not connected")
+	}
+	// 尝试列出工具作为健康检查
+	_, err := c.mcpClient.ListTools(ctx)
+	return err
+}
+
+// GetConfig 获取配置
+func (c *RealClient) GetConfig() Config {
+	return c.config
+}
+
+// UpdateConfig 更新配置
+func (c *RealClient) UpdateConfig(config Config) error {
+	if err := config.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+	c.config = config
+	return nil
+}
+
+// convertContent 转换 mcp.Content 为 Content
+func convertContent(contents []mcp.Content) []Content {
+	result := make([]Content, 0, len(contents))
+	for _, content := range contents {
+		result = append(result, content)
+	}
+	return result
 }
 
 // HTTPClientConfig HTTP 客户端配置

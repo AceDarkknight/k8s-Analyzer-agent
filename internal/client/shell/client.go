@@ -10,6 +10,8 @@ import (
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	"github.com/AceDarkknight/shell-executor-mcp/pkg/configs"
+	"github.com/AceDarkknight/shell-executor-mcp/pkg/mcpclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -80,7 +82,7 @@ func (c *Config) Validate() error {
 // Client Shell Executor MCP Client 实现
 type Client struct {
 	config       Config
-	mcpClient    *mcp.Client
+	mcpClient    *mcpclient.Client
 	mcpSession   *mcp.ClientSession
 	httpClient   *http.Client
 	connected    bool
@@ -89,21 +91,134 @@ type Client struct {
 
 // NewClient 创建新的 Shell Executor MCP Client
 func NewClient(config Config) (*Client, error) {
+	return NewRealClient(&config)
+}
+
+// NewRealClient 创建真实的 Shell Executor MCP Client
+// 使用 shell-executor-mcp/pkg/mcpclient 提供的客户端实现
+func NewRealClient(config *Config) (*Client, error) {
 	// 验证配置
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
-	// 创建 HTTP Client
-	httpClient := &http.Client{
-		Timeout: config.Timeout,
+	// 创建 mcpclient.Config
+	servers := make([]configs.ServerConfig, len(config.Servers))
+	for i, s := range config.Servers {
+		servers[i] = configs.ServerConfig{Name: s.Name, URL: s.URL}
+	}
+	mcpConfig := &configs.ClientConfig{
+		Servers: servers,
+		Log: configs.LogConfig{
+			Level:  "info",
+			LogDir: "logs/shell",
+		},
 	}
 
+	// 创建 mcpclient.Client
+	mcpClient, err := mcpclient.NewClient(mcpConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create mcp client: %w", err)
+	}
+
+	// 创建 RealClient
 	return &Client{
-		config:     config,
-		httpClient: httpClient,
-		connected:  false,
+		config:    *config,
+		mcpClient: mcpClient,
+		connected: false,
 	}, nil
+}
+
+// RealClient 真实的 Shell Executor MCP Client 实现
+type RealClient struct {
+	config    Config
+	mcpClient *mcpclient.Client
+	connected bool
+}
+
+// Connect 建立连接
+func (c *RealClient) Connect(ctx context.Context) error {
+	if err := c.mcpClient.Connect(ctx); err != nil {
+		return &client.ConnectionError{
+			Reason: "failed to connect to MCP server",
+			Err:    err,
+		}
+	}
+	c.connected = true
+	return nil
+}
+
+// Close 关闭连接
+func (c *RealClient) Close() error {
+	c.connected = false
+	return c.mcpClient.Close()
+}
+
+// CallTool 执行 Shell Executor MCP Server 上的特定工具
+func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	if !c.connected {
+		return nil, &client.ToolExecutionError{
+			ToolName: name,
+			Reason:   "client not connected",
+		}
+	}
+
+	result, err := c.mcpClient.GetSession().CallTool(ctx, &mcp.CallToolParams{
+		Name:      name,
+		Arguments: args,
+	})
+	if err != nil {
+		return nil, &client.ToolExecutionError{
+			ToolName: name,
+			Reason:   "failed to call tool",
+			Err:      err,
+		}
+	}
+
+	return result, nil
+}
+
+// ListTools 获取工具列表
+func (c *RealClient) ListTools(ctx context.Context) ([]*mcp.Tool, error) {
+	if !c.connected {
+		return nil, fmt.Errorf("client not connected")
+	}
+
+	tools, err := c.mcpClient.GetSession().ListTools(ctx, &mcp.ListToolsParams{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tools: %w", err)
+	}
+
+	return tools.Tools, nil
+}
+
+// IsConnected 检查是否已连接
+func (c *RealClient) IsConnected() bool {
+	return c.connected
+}
+
+// HealthCheck 健康检查
+func (c *RealClient) HealthCheck(ctx context.Context) error {
+	if !c.connected {
+		return fmt.Errorf("client not connected")
+	}
+	// 尝试列出工具作为健康检查
+	_, err := c.mcpClient.GetSession().ListTools(ctx, &mcp.ListToolsParams{})
+	return err
+}
+
+// GetConfig 获取配置
+func (c *RealClient) GetConfig() Config {
+	return c.config
+}
+
+// UpdateConfig 更新配置
+func (c *RealClient) UpdateConfig(config Config) error {
+	if err := config.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+	c.config = config
+	return nil
 }
 
 // NewClientFromFile 从配置文件创建 Shell Executor MCP Client
@@ -123,7 +238,7 @@ func NewClientFromFile(configPath string) (*Client, error) {
 		}
 	}
 
-	return NewClient(*config)
+	return NewRealClient(config)
 }
 
 // Connect 建立与 Shell Executor MCP Server 的连接
@@ -133,71 +248,30 @@ func (c *Client) Connect(ctx context.Context) error {
 		return nil // 已经连接
 	}
 
-	logger.Info("Attempting to connect to Shell MCP Server", logger.Int("serverCount", len(c.config.Servers)))
+	logger.Info("Attempting to connect to Shell MCP Server")
 
-	// 尝试连接到第一个可用的服务器
-	for i := 0; i < len(c.config.Servers); i++ {
-		server := c.config.Servers[i]
-		logger.Debug("Attempting to connect to server", logger.String("name", server.Name), logger.String("url", server.URL))
-
-		// 构建 SSE URL
-		sseURL, err := url.Parse(server.URL)
-		if err != nil {
-			logger.Warn("Invalid server URL", logger.String("name", server.Name), logger.Err(err))
-			continue // 跳过无效的 URL
+	// 使用 mcpclient 连接
+	if err := c.mcpClient.Connect(ctx); err != nil {
+		return &client.ConnectionError{
+			Reason: "failed to connect to MCP server",
+			Err:    err,
 		}
-
-		// 确保 URL 路径以 /sse 结尾
-		if sseURL.Path == "" || sseURL.Path == "/" {
-			sseURL.Path = c.config.SSEPath
-		}
-
-		// 创建 HTTP Headers
-		headers := make(map[string]string)
-		if server.Token != "" {
-			headers["Authorization"] = fmt.Sprintf("Bearer %s", server.Token)
-		}
-
-		// 创建 MCP Client
-		impl := &mcp.Implementation{}
-		mcpClient := mcp.NewClient(impl, &mcp.ClientOptions{})
-
-		// 创建 SSE Transport
-		transport := &mcp.SSEClientTransport{
-			Endpoint:   sseURL.String(),
-			HTTPClient: c.httpClient,
-		}
-
-		// 初始化连接
-		session, err := mcpClient.Connect(ctx, transport, &mcp.ClientSessionOptions{})
-		if err != nil {
-			logger.Warn("Failed to connect to server", logger.String("name", server.Name), logger.Err(err))
-			continue // 跳过初始化失败的客户端
-		}
-
-		// 连接成功
-		c.mcpClient = mcpClient
-		c.mcpSession = session
-		c.connected = true
-		c.currentIndex = i
-		logger.Info("Successfully connected to Shell MCP Server", logger.String("serverName", server.Name))
-		return nil
 	}
 
-	// 所有服务器都连接失败
-	logger.Error("Failed to connect to any Shell MCP Server")
-	return &client.ConnectionError{
-		Reason: "failed to connect to any server",
-	}
+	// 连接成功
+	c.mcpSession = c.mcpClient.GetSession()
+	c.connected = true
+	logger.Info("Successfully connected to Shell MCP Server")
+	return nil
 }
 
 // Close 终止与 Shell Executor MCP Server 的连接
 func (c *Client) Close() error {
-	if !c.connected || c.mcpSession == nil {
+	if !c.connected || c.mcpClient == nil {
 		return nil
 	}
 
-	err := c.mcpSession.Close()
+	err := c.mcpClient.Close()
 	c.connected = false
 	c.mcpClient = nil
 	c.mcpSession = nil
@@ -232,24 +306,6 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 
 	if err != nil {
 		logger.Error("Tool execution failed", logger.String("tool", name), logger.Err(err))
-		// 如果启用了故障转移且当前服务器不可用，尝试切换到备用服务器
-		if c.config.EnableFailover && c.isConnectionError(err) {
-			logger.Warn("Attempting failover due to connection error", logger.String("tool", name))
-			if failoverErr := c.failover(ctx); failoverErr == nil {
-				// 故障转移成功，重试工具调用
-				logger.Info("Failover successful, retrying tool call", logger.String("tool", name))
-				result, err := c.mcpSession.CallTool(ctx, &mcp.CallToolParams{
-					Name:      name,
-					Arguments: args,
-				})
-				if err != nil {
-					return nil, err
-				}
-				logger.Info("Tool call succeeded after failover", logger.String("tool", name))
-				return result, nil
-			}
-		}
-
 		return nil, &client.ToolExecutionError{
 			ToolName: name,
 			Reason:   "tool execution failed",
@@ -313,67 +369,6 @@ func (c *Client) GetCurrentServer() *ServerConfig {
 		return nil
 	}
 	return &c.config.Servers[c.currentIndex]
-}
-
-// failover 切换到备用服务器
-func (c *Client) failover(ctx context.Context) error {
-	logger.Info("Starting failover process", logger.Int("currentIndex", c.currentIndex))
-
-	// 关闭当前连接
-	if c.mcpSession != nil {
-		c.mcpSession.Close()
-	}
-	c.connected = false
-	c.mcpClient = nil
-	c.mcpSession = nil
-
-	// 尝试连接到下一个服务器
-	for i := 1; i < len(c.config.Servers); i++ {
-		nextIndex := (c.currentIndex + i) % len(c.config.Servers)
-		server := c.config.Servers[nextIndex]
-		logger.Debug("Attempting to connect to failover server", logger.String("name", server.Name), logger.String("url", server.URL))
-
-		// 构建 SSE URL
-		sseURL, err := url.Parse(server.URL)
-		if err != nil {
-			logger.Warn("Invalid failover server URL", logger.String("name", server.Name), logger.Err(err))
-			continue
-		}
-
-		// 确保 URL 路径以 /sse 结尾
-		if sseURL.Path == "" || sseURL.Path == "/" {
-			sseURL.Path = c.config.SSEPath
-		}
-
-		// 创建 MCP Client
-		impl := &mcp.Implementation{}
-		mcpClient := mcp.NewClient(impl, &mcp.ClientOptions{})
-
-		// 创建 SSE Transport
-		transport := &mcp.SSEClientTransport{
-			Endpoint:   sseURL.String(),
-			HTTPClient: c.httpClient,
-		}
-
-		// 初始化连接
-		session, err := mcpClient.Connect(ctx, transport, &mcp.ClientSessionOptions{})
-		if err != nil {
-			logger.Warn("Failed to connect to failover server", logger.String("name", server.Name), logger.Err(err))
-			continue
-		}
-
-		// 连接成功
-		c.mcpClient = mcpClient
-		c.mcpSession = session
-		c.connected = true
-		c.currentIndex = nextIndex
-		logger.Info("Failover successful", logger.String("serverName", server.Name))
-		return nil
-	}
-
-	// 所有服务器都连接失败
-	logger.Error("Failover failed: no available servers")
-	return &client.ConnectionError{Reason: "failover failed: no available servers"}
 }
 
 // isConnectionError 判断错误是否为连接错误

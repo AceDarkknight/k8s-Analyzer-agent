@@ -73,8 +73,8 @@ graph TD
     - **结果反馈**：规范化执行结果（Stdout/Stderr）或拒绝原因。
 
 #### 2.2.3 MCP Client Integrations
-- **K8s MCP Client**: 负责与 `k8s-mcp` Server 通信，封装资源查询接口。
-- **Shell Executor MCP Client**: 负责与 `shell-executor-mcp` Server 通信，发送经清洗后的安全命令。
+- **K8s MCP Client**: 负责与 `k8s-mcp` Server 通信，集成 `github.com/AceDarkknight/k8s-mcp` 客户端库，封装资源查询接口。
+- **Shell Executor MCP Client**: 负责与 `shell-executor-mcp` Server 通信，集成 `github.com/AceDarkknight/shell-executor-mcp` 相关实现，发送经清洗后的安全命令。
 
 ## 3. 交互流程设计
 
@@ -213,9 +213,9 @@ type MCPClient interface {
 
 - **框架**: Eino (Golang) - 用于构建 Agent Graph 和 Orchestration。
 - **MCP SDK**: `github.com/modelcontextprotocol/go-sdk` - 用于实现 MCP Client。
-- **External Tools**:
-    - `k8s-mcp`: 用于 K8s 数据源。
-    - `shell-executor-mcp`: 用于基础命令执行能力。
+- **External Tools Integration**:
+    - `github.com/AceDarkknight/k8s-mcp`: 集成 K8s MCP 客户端功能，用于获取 K8s 数据源。
+    - `github.com/AceDarkknight/shell-executor-mcp`: 集成 Shell Executor MCP 客户端功能，用于基础命令执行能力。
 - **LLM**: 用于意图理解、代码审计（在子 Agent 中）和报告生成。
 
 ## 7. 异常处理设计

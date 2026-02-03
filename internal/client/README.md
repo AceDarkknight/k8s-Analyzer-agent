@@ -4,6 +4,10 @@
 
 Client 模块负责与 MCP (Model Context Protocol) Server 建立连接、发送指令并解析响应。该模块为 K8s Analyzer Agent 提供与外部 MCP Server 通信的能力。
 
+目前，本模块集成了以下 SDK 作为底层实现，以确保与标准 MCP Server 的最佳兼容性：
+- `github.com/AceDarkknight/k8s-mcp`
+- `github.com/AceDarkknight/shell-executor-mcp`
+
 ## 目录结构
 
 ```
@@ -216,8 +220,11 @@ go test -cover ./internal/client/...
 ## 依赖
 
 - `github.com/modelcontextprotocol/go-sdk/mcp` - MCP SDK
+- `github.com/AceDarkknight/k8s-mcp` - K8s MCP SDK
+- `github.com/AceDarkknight/shell-executor-mcp` - Shell Executor MCP SDK
 - `github.com/stretchr/testify` - 测试框架
 
 ## 更新日志
 
+- 2026-02-03: 集成 `k8s-mcp` 和 `shell-executor-mcp` SDK 作为底层实现
 - 2026-01-25: 初始版本，实现 K8s MCP 和 Shell Executor MCP Client

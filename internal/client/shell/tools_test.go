@@ -3,6 +3,7 @@ package shell
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -487,6 +488,11 @@ func TestParseToolResult(t *testing.T) {
 func TestClient_ExecuteCommand_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("跳过集成测试")
+	}
+
+	// 默认跳过集成测试，除非设置了环境变量
+	if os.Getenv("RUN_INTEGRATION_TESTS") != "true" {
+		t.Skip("跳过集成测试，设置 RUN_INTEGRATION_TESTS=true 来运行")
 	}
 
 	config := Config{

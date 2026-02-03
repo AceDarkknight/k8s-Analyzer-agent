@@ -14,7 +14,7 @@
 ## 2. 功能需求
 
 ### 2.1 K8s 信息获取
-- **功能描述**：Agent 需通过集成 `k8s-mcp` 工具，与 K8s API Server 交互，获取集群资源信息。
+- **功能描述**：Agent 需通过集成 `github.com/AceDarkknight/k8s-mcp` 提供的客户端库或直接连接其 Server，与 K8s API Server 交互，获取集群资源信息。
 - **具体要求**：
     - 支持获取 Node 状态（CPU/内存使用率、Ready 状态等）。
     - 支持获取 Pod 状态（Running, Pending, CrashLoopBackOff 等）。
@@ -22,7 +22,7 @@
     - 支持通过 Label Selector 过滤特定应用或命名空间的资源。
 
 ### 2.2 安全命令执行子 Agent
-- **功能描述**：为了执行一些非 K8s API 原生支持的诊断操作（如网络连通性测试、日志文件查看等），系统需集成 `shell-executor-mcp`。为了防止误操作或恶意破坏，必须封装一个独立的子 Agent 负责命令的安全评估与执行。
+- **功能描述**：为了执行一些非 K8s API 原生支持的诊断操作（如网络连通性测试、日志文件查看等），系统需集成 `github.com/AceDarkknight/shell-executor-mcp`。为了防止误操作或恶意破坏，必须封装一个独立的子 Agent 负责命令的安全评估与执行。
 - **具体流程**：
     1.  **请求接收**：主 Agent 向子 Agent 发送待执行的 Shell 命令。
     2.  **安全评估**：子 Agent 首先对命令进行语义分析和安全检查。

@@ -61,8 +61,8 @@ graph TD
 *   **Main Agent**: 系统的“大脑”，负责意图识别、任务编排 (基于 Eino Graph) 以及最终报告的生成。它决定何时获取信息、何时执行诊断。
 *   **Secure Sub-Agent**: 系统的“安全守门员”，负责接收主 Agent 的命令请求，进行安全审计，仅允许安全的命令通过并调用底层的 Shell 执行器。
 *   **MCP Clients**:
-    *   `k8s-mcp`: 用于连接 K8s MCP Server，查询集群资源。
-    *   `shell-executor-mcp`: 用于连接 Shell Executor MCP Server，执行诊断命令。
+    *   `k8s-mcp`: 基于 [k8s-mcp](https://github.com/AceDarkknight/k8s-mcp) SDK 实现，用于连接 K8s MCP Server，查询集群资源。
+    *   `shell-executor-mcp`: 基于 [shell-executor-mcp](https://github.com/AceDarkknight/shell-executor-mcp) SDK 实现，用于连接 Shell Executor MCP Server，执行诊断命令。
 
 更多架构细节请参考 [docs/architecture.md](docs/architecture.md)。
 
@@ -81,7 +81,7 @@ graph TD
 
 1.  **Go**: 1.22 或更高版本。
 2.  **MCP Servers**:
-    *   正在运行的 [k8s-mcp](https://github.com/modelcontextprotocol/servers/tree/main/src/k8s) Server (确保已配置好 Kubeconfig)。
+    *   正在运行的 [k8s-mcp](https://github.com/AceDarkknight/k8s-mcp) Server 。
     *   正在运行的 shell-executor-mcp Server。
 3.  **LLM API**: 有效的 LLM API Key (如 OpenAI, Gemini, Claude 等)，用于支持 Agent 的智能分析。
 
