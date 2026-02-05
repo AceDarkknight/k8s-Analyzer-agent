@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 )
 
 // MockSafetyAgent Mock Safety Agent，用于测试
@@ -38,6 +39,18 @@ func (m *MockSafetyAgent) GetCommands() []string {
 	return m.commands
 }
 
+// getTestLLMConfig 返回测试用的 LLM 配置
+func getTestLLMConfig() *config.LLMConfig {
+	return &config.LLMConfig{
+		Provider:    "rule-based",
+		BaseURL:     "",
+		APIKey:      "",
+		Model:       "gpt-4",
+		Temperature: 0.7,
+		MaxTokens:   2000,
+	}
+}
+
 // TestNewAgent 测试 Agent 创建
 func TestNewAgent(t *testing.T) {
 	// 创建 Mock K8s Client
@@ -47,7 +60,7 @@ func TestNewAgent(t *testing.T) {
 	safetyAgent := NewMockSafetyAgent()
 
 	// 创建 Agent
-	agent, err := NewAgent(k8sClient, safetyAgent)
+	agent, err := NewAgent(k8sClient, safetyAgent, getTestLLMConfig())
 	if err != nil {
 		t.Fatalf("Failed to create agent: %v", err)
 	}
@@ -85,7 +98,7 @@ func TestAgentRun(t *testing.T) {
 	safetyAgent := NewMockSafetyAgent()
 
 	// 创建 Agent
-	agent, err := NewAgent(k8sClient, safetyAgent)
+	agent, err := NewAgent(k8sClient, safetyAgent, getTestLLMConfig())
 	if err != nil {
 		t.Fatalf("Failed to create agent: %v", err)
 	}
@@ -227,7 +240,7 @@ func TestAddRecommendation(t *testing.T) {
 
 // TestRuleBasedLLM 测试基于规则的 LLM
 func TestRuleBasedLLM(t *testing.T) {
-	llm := NewRuleBasedLLM()
+	llm := NewRuleBasedLLM(getTestLLMConfig())
 
 	// 测试达到最大迭代次数
 	state := NewState("test")
@@ -403,7 +416,7 @@ func TestAgentRunWithMaxIterations(t *testing.T) {
 	safetyAgent := NewMockSafetyAgent()
 
 	// 创建 Agent
-	agent, err := NewAgent(k8sClient, safetyAgent)
+	agent, err := NewAgent(k8sClient, safetyAgent, getTestLLMConfig())
 	if err != nil {
 		t.Fatalf("Failed to create agent: %v", err)
 	}
@@ -451,7 +464,7 @@ func TestGraphFlow(t *testing.T) {
 	safetyAgent := NewMockSafetyAgent()
 
 	// 创建 Agent
-	agent, err := NewAgent(k8sClient, safetyAgent)
+	agent, err := NewAgent(k8sClient, safetyAgent, getTestLLMConfig())
 	if err != nil {
 		t.Fatalf("Failed to create agent: %v", err)
 	}
@@ -530,7 +543,7 @@ func TestTimeoutHandling(t *testing.T) {
 	safetyAgent := NewMockSafetyAgent()
 
 	// 创建 Agent
-	agent, err := NewAgent(k8sClient, safetyAgent)
+	agent, err := NewAgent(k8sClient, safetyAgent, getTestLLMConfig())
 	if err != nil {
 		t.Fatalf("Failed to create agent: %v", err)
 	}
@@ -566,7 +579,7 @@ func BenchmarkAgentRun(b *testing.B) {
 	safetyAgent := NewMockSafetyAgent()
 
 	// 创建 Agent
-	agent, err := NewAgent(k8sClient, safetyAgent)
+	agent, err := NewAgent(k8sClient, safetyAgent, getTestLLMConfig())
 	if err != nil {
 		b.Fatalf("Failed to create agent: %v", err)
 	}

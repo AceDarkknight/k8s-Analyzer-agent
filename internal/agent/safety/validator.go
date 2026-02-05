@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
@@ -287,11 +288,22 @@ func IsUnsafeCommand(err error) bool {
 
 // RuleBasedAuditor 基于规则的审计器
 // 使用预定义规则进行命令审计
-type RuleBasedAuditor struct{}
+type RuleBasedAuditor struct {
+	modelName string // 模型名称（从配置中传入）
+}
 
 // NewRuleBasedAuditor 创建基于规则的审计器
-func NewRuleBasedAuditor() *RuleBasedAuditor {
-	return &RuleBasedAuditor{}
+func NewRuleBasedAuditor(llmConfig *config.LLMConfig) *RuleBasedAuditor {
+	auditor := &RuleBasedAuditor{
+		modelName: llmConfig.Model,
+	}
+
+	// 记录使用的模型
+	logger.Info("[Safety] RuleBasedAuditor initialized",
+		logger.String("model", auditor.modelName),
+		logger.String("provider", llmConfig.Provider))
+
+	return auditor
 }
 
 // AuditCommand 审计命令的安全性

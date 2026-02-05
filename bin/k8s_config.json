@@ -1,7 +1,14 @@
 {
-  "port": 8443,
+  "server_url": "",
+  "token": "",
   "insecure": true,
-  "token": "k8s-analyzer-token",
-  "kubeconfig": "",
-  "log_level": "info"
+  "timeout": 30,
+  "retry_config": {
+    "max_attempts": 3,
+    "initial_delay": 1,
+    "max_delay": 10,
+    "multiplier": 2.0,
+    "jitter": true
+  },
+  "sse_path": "/sse"
 }

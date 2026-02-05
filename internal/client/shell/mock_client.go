@@ -34,11 +34,11 @@ func NewMockClientFromFile(configPath string) (*MockClient, error) {
 				URL:  "http://localhost:8080",
 			},
 		},
-		Timeout: 30 * time.Second,
+		Timeout: 30, // 30 秒
 		RetryConfig: clientpkg.RetryConfig{
 			MaxAttempts:  3,
-			InitialDelay: 1 * time.Second,
-			MaxDelay:     10 * time.Second,
+			InitialDelay: 1,  // 1 秒
+			MaxDelay:     10, // 10 秒
 		},
 		SSEPath: "/sse",
 	}

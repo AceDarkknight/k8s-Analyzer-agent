@@ -4,8 +4,9 @@ package k8s
 import (
 	"context"
 	"testing"
-	"time"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
+	clientpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,10 +73,10 @@ func TestConfig_Validate(t *testing.T) {
 			} else {
 				assert.NoError(t, err, "不应该返回错误")
 				// 验证默认值
-				assert.Equal(t, 30*time.Second, tt.config.Timeout, "应该设置默认超时")
+				assert.Equal(t, 30, tt.config.Timeout, "应该设置默认超时")
 				assert.Equal(t, 3, tt.config.RetryConfig.MaxAttempts, "应该设置默认重试次数")
-				assert.Equal(t, 1*time.Second, tt.config.RetryConfig.InitialWait, "应该设置默认初始等待时间")
-				assert.Equal(t, 10*time.Second, tt.config.RetryConfig.MaxWait, "应该设置默认最大等待时间")
+				assert.Equal(t, 1, tt.config.RetryConfig.InitialDelay, "应该设置默认初始等待时间")
+				assert.Equal(t, 10, tt.config.RetryConfig.MaxDelay, "应该设置默认最大等待时间")
 				assert.Equal(t, "/sse", tt.config.SSEPath, "应该设置默认 SSE 路径")
 			}
 		})
@@ -108,29 +109,29 @@ func TestNewClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, err := NewClient(tt.config)
+			k8sClient, err := NewClient(tt.config)
 
 			if tt.expectError {
 				assert.Error(t, err, "应该返回错误")
-				assert.Nil(t, client, "client 应为 nil")
+				assert.Nil(t, k8sClient, "client 应为 nil")
 			} else {
 				assert.NoError(t, err, "不应该返回错误")
-				assert.NotNil(t, client, "client 不应为 nil")
-				assert.False(t, client.IsConnected(), "初始状态应为未连接")
+				assert.NotNil(t, k8sClient, "client 不应为 nil")
+				assert.False(t, k8sClient.IsConnected(), "初始状态应为未连接")
 
 				// 预期配置包含默认值
 				expectedConfig := tt.config
 				if expectedConfig.Timeout == 0 {
-					expectedConfig.Timeout = 30 * time.Second
+					expectedConfig.Timeout = 30
 				}
 				if expectedConfig.RetryConfig.MaxAttempts == 0 {
-					expectedConfig.RetryConfig = DefaultRetryConfig()
+					expectedConfig.RetryConfig = client.DefaultRetryConfig()
 				}
 				if expectedConfig.SSEPath == "" {
 					expectedConfig.SSEPath = "/sse"
 				}
 
-				assert.Equal(t, expectedConfig, client.GetConfig(), "配置应该正确保存")
+				assert.Equal(t, expectedConfig, k8sClient.GetConfig(), "配置应该正确保存")
 			}
 		})
 	}
@@ -153,7 +154,7 @@ func TestClient_GetConfig(t *testing.T) {
 		ServerURL: "https://localhost:8443",
 		Token:     "test-token",
 		Insecure:  true,
-		Timeout:   60 * time.Second,
+		Timeout:   60,
 	}
 
 	client, err := NewClient(config)
@@ -162,7 +163,7 @@ func TestClient_GetConfig(t *testing.T) {
 	// 预期配置包含默认值
 	expectedConfig := config
 	if expectedConfig.RetryConfig.MaxAttempts == 0 {
-		expectedConfig.RetryConfig = DefaultRetryConfig()
+		expectedConfig.RetryConfig = clientpkg.DefaultRetryConfig()
 	}
 	if expectedConfig.SSEPath == "" {
 		expectedConfig.SSEPath = "/sse"
@@ -209,10 +210,10 @@ func TestClient_UpdateConfig(t *testing.T) {
 	// 预期配置包含默认值
 	expectedConfig := newConfig
 	if expectedConfig.Timeout == 0 {
-		expectedConfig.Timeout = 30 * time.Second
+		expectedConfig.Timeout = 30
 	}
 	if expectedConfig.RetryConfig.MaxAttempts == 0 {
-		expectedConfig.RetryConfig = DefaultRetryConfig()
+		expectedConfig.RetryConfig = clientpkg.DefaultRetryConfig()
 	}
 	if expectedConfig.SSEPath == "" {
 		expectedConfig.SSEPath = "/sse"

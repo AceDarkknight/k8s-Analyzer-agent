@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
@@ -32,8 +33,8 @@ type Config struct {
 	// Servers 服务器列表（支持故障转移）
 	Servers []ServerConfig `json:"servers"`
 
-	// Timeout 请求超时时间
-	Timeout time.Duration `json:"timeout"`
+	// Timeout 请求超时时间（秒）
+	Timeout int `json:"timeout"`
 
 	// RetryConfig 重试配置
 	RetryConfig client.RetryConfig `json:"retry_config"`
@@ -65,7 +66,7 @@ func (c *Config) Validate() error {
 	}
 
 	if c.Timeout <= 0 {
-		c.Timeout = 30 * time.Second // 默认 30 秒
+		c.Timeout = 30 // 默认 30 秒
 	}
 
 	if c.RetryConfig.MaxAttempts <= 0 {
@@ -222,6 +223,7 @@ func (c *RealClient) UpdateConfig(config Config) error {
 }
 
 // NewClientFromFile 从配置文件创建 Shell Executor MCP Client
+// 支持从环境变量读取配置，环境变量优先级高于配置文件
 func NewClientFromFile(configPath string) (*Client, error) {
 	config, err := client.LoadConfig[Config](configPath)
 	if err != nil {
@@ -236,6 +238,20 @@ func NewClientFromFile(configPath string) (*Client, error) {
 				URL:  "http://localhost:8080",
 			},
 		}
+	}
+
+	// 从环境变量读取配置，覆盖配置文件中的值
+	// 优先级：环境变量 > 配置文件
+	if envURL := os.Getenv("SHELL_MCP_URL"); envURL != "" {
+		// 覆盖第一个服务器的 URL
+		config.Servers[0].URL = envURL
+		logger.Info("Using SHELL_MCP_URL from environment variable", logger.String("url", envURL))
+	}
+
+	if envToken := os.Getenv("SHELL_MCP_TOKEN"); envToken != "" {
+		// 覆盖第一个服务器的 Token
+		config.Servers[0].Token = envToken
+		logger.Info("Using SHELL_MCP_TOKEN from environment variable")
 	}
 
 	return NewRealClient(config)
@@ -409,7 +425,7 @@ func (c *Client) UpdateConfig(config Config) error {
 
 	// 更新 HTTP Client
 	c.httpClient = &http.Client{
-		Timeout: config.Timeout,
+		Timeout: time.Duration(config.Timeout) * time.Second,
 	}
 
 	return nil

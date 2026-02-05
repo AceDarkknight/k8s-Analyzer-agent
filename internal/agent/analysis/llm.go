@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
@@ -26,7 +27,8 @@ type LLM interface {
 // RuleBasedLLM 基于规则的 LLM 实现
 // 使用预定义规则进行决策，不需要真实的 LLM API
 type RuleBasedLLM struct {
-	rules []DecisionRule
+	rules     []DecisionRule
+	modelName string // 模型名称（从配置中传入）
 }
 
 // DecisionRule 决策规则
@@ -45,13 +47,19 @@ type DecisionRule struct {
 }
 
 // NewRuleBasedLLM 创建基于规则的 LLM
-func NewRuleBasedLLM() *RuleBasedLLM {
+func NewRuleBasedLLM(llmConfig *config.LLMConfig) *RuleBasedLLM {
 	llm := &RuleBasedLLM{
-		rules: make([]DecisionRule, 0),
+		rules:     make([]DecisionRule, 0),
+		modelName: llmConfig.Model,
 	}
 
 	// 初始化默认规则
 	llm.initDefaultRules()
+
+	// 记录使用的模型
+	logger.Info("[Analysis] RuleBasedLLM initialized",
+		logger.String("model", llm.modelName),
+		logger.String("provider", llmConfig.Provider))
 
 	return llm
 }

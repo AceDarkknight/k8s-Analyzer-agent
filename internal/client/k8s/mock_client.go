@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	clientpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 )
 
 // MockClient Mock K8s Client 实现
@@ -29,11 +31,11 @@ func NewMockClientFromFile(configPath string) (*MockClient, error) {
 		ServerURL: "https://localhost:8443",
 		Token:     "mock-token",
 		Insecure:  true,
-		Timeout:   30 * time.Second,
-		RetryConfig: RetryConfig{
-			MaxAttempts: 3,
-			InitialWait: 1 * time.Second,
-			MaxWait:     10 * time.Second,
+		Timeout:   30, // 30 秒
+		RetryConfig: clientpkg.RetryConfig{
+			MaxAttempts:  3,
+			InitialDelay: 1,  // 1 秒
+			MaxDelay:     10, // 10 秒
 		},
 		SSEPath: "/sse",
 	}

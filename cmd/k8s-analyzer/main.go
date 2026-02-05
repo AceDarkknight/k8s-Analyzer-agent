@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
@@ -22,6 +24,7 @@ const (
 	// 默认配置文件路径
 	defaultK8sConfigPath   = "bin/k8s_config.json"
 	defaultShellConfigPath = "bin/shell_config.json"
+	defaultLLMConfigPath   = "bin/llm_config.json"
 )
 
 func main() {
@@ -57,6 +60,16 @@ func main() {
 		logger.Warn("无法获取 Shell 配置路径，使用默认配置", logger.Err(err))
 	}
 
+	// 读取 LLM 配置
+	llmConfig, err := loadLLMConfig(defaultLLMConfigPath)
+	if err != nil {
+		logger.Warn("无法读取 LLM 配置，使用默认配置", logger.Err(err))
+		llmConfig = config.DefaultAgentLLMConfig()
+	}
+	logger.Info("LLM 配置加载成功",
+		logger.String("analysis_model", llmConfig.Analysis.Model),
+		logger.String("safety_model", llmConfig.Safety.Model))
+
 	// 2. 初始化 K8s Client
 	logger.Info("步骤 2: 初始化 K8s Client...")
 	k8sClient, err := k8s.NewClientFromFile(k8sConfigPath)
@@ -82,8 +95,8 @@ func main() {
 
 	// 4. 初始化 Safety Agent
 	logger.Info("步骤 4: 初始化 Safety Agent...")
-	// 创建 LLM 审计器（使用基于规则的审计器）
-	llmAuditor := safety.NewRuleBasedAuditor()
+	// 创建 LLM 审计器（使用基于规则的审计器，传入 Safety 配置）
+	llmAuditor := safety.NewRuleBasedAuditor(&llmConfig.Safety)
 	safetyAgent, err := safety.NewAgent(shellClient, shellConfigPath, llmAuditor)
 	if err != nil {
 		logger.Fatal("Safety Agent 初始化失败", logger.Err(err))
@@ -92,7 +105,7 @@ func main() {
 
 	// 5. 初始化 Analysis Agent
 	logger.Info("步骤 5: 初始化 Analysis Agent...")
-	analysisAgent, err := analysis.NewAgent(k8sClient, safetyAgent)
+	analysisAgent, err := analysis.NewAgent(k8sClient, safetyAgent, &llmConfig.Analysis)
 	if err != nil {
 		logger.Fatal("Analysis Agent 初始化失败", logger.Err(err))
 	}
@@ -113,14 +126,10 @@ func main() {
 		}()
 	}
 
-	// 7. 尝试连接 Shell Client（预期会失败，因为没有真实的 MCP Server）
-	logger.Info("步骤 7: 尝试连接 Shell Client...")
-	if err := shellClient.Connect(ctx); err != nil {
-		logger.Warn("Shell Client 连接失败 (预期行为)", logger.Err(err))
-		logger.Info("注意: 这是因为没有真实的 MCP Server 运行")
-	} else {
-		logger.Info("Shell Client 连接成功")
-	}
+	// 7. 跳过 Shell Client 连接（预期会失败，因为没有真实的 MCP Server）
+	logger.Info("步骤 7: 跳过 Shell Client 连接...")
+	logger.Warn("Shell Client 连接被跳过 (预期行为)")
+	logger.Info("注意: 这是因为没有真实的 MCP Server 运行")
 	defer func() {
 		if err := shellClient.Close(); err != nil {
 			logger.Error("Shell Client 关闭失败", logger.Err(err))
@@ -159,6 +168,49 @@ func getConfigPath(defaultPath string) (string, error) {
 	}
 
 	return absPath, nil
+}
+
+// loadLLMConfig 加载 LLM 配置文件
+// 配置优先级：环境变量 > 配置文件 > 默认值
+func loadLLMConfig(configPath string) (*config.AgentLLMConfig, error) {
+	// 尝试获取绝对路径
+	absPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("无法获取配置文件绝对路径: %w", err)
+	}
+
+	// 读取配置文件
+	configData, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("无法读取配置文件: %w", err)
+	}
+
+	// 解析配置
+	var llmConfig config.AgentLLMConfig
+	if err := json.Unmarshal(configData, &llmConfig); err != nil {
+		return nil, fmt.Errorf("无法解析配置文件: %w", err)
+	}
+
+	// 环境变量覆盖配置文件中的值
+	// 优先级：环境变量 > 配置文件
+
+	// Analysis Agent 配置覆盖
+	if apiKey := os.Getenv("ANALYSIS_AGENT_API_KEY"); apiKey != "" {
+		llmConfig.Analysis.APIKey = apiKey
+	}
+	if baseURL := os.Getenv("ANALYSIS_AGENT_BASE_URL"); baseURL != "" {
+		llmConfig.Analysis.BaseURL = baseURL
+	}
+
+	// Safety Agent 配置覆盖
+	if apiKey := os.Getenv("SAFETY_AGENT_API_KEY"); apiKey != "" {
+		llmConfig.Safety.APIKey = apiKey
+	}
+	if baseURL := os.Getenv("SAFETY_AGENT_BASE_URL"); baseURL != "" {
+		llmConfig.Safety.BaseURL = baseURL
+	}
+
+	return &llmConfig, nil
 }
 
 // printReport 打印分析报告

@@ -15,8 +15,8 @@ func TestDefaultRetryConfig(t *testing.T) {
 	config := DefaultRetryConfig()
 
 	assert.Equal(t, 3, config.MaxAttempts, "默认最大重试次数应为 3")
-	assert.Equal(t, 1*time.Second, config.InitialDelay, "默认初始延迟应为 1 秒")
-	assert.Equal(t, 10*time.Second, config.MaxDelay, "默认最大延迟应为 10 秒")
+	assert.Equal(t, 1, config.InitialDelay, "默认初始延迟应为 1 秒")
+	assert.Equal(t, 10, config.MaxDelay, "默认最大延迟应为 10 秒")
 	assert.Equal(t, 2.0, config.Multiplier, "默认倍增因子应为 2.0")
 	assert.True(t, config.Jitter, "默认应启用抖动")
 }
@@ -189,8 +189,8 @@ func TestRetryWithBackoff_Delay(t *testing.T) {
 	ctx := context.Background()
 	config := RetryConfig{
 		MaxAttempts:  3,
-		InitialDelay: 100 * time.Millisecond,
-		MaxDelay:     500 * time.Millisecond,
+		InitialDelay: 1, // 1 秒
+		MaxDelay:     5, // 5 秒
 		Multiplier:   2.0,
 		Jitter:       false, // 禁用抖动以便测试
 	}
@@ -209,21 +209,21 @@ func TestRetryWithBackoff_Delay(t *testing.T) {
 	delay1 := timestamps[1].Sub(timestamps[0])
 	delay2 := timestamps[2].Sub(timestamps[1])
 
-	// 第一次延迟应该约为 100ms
-	assert.GreaterOrEqual(t, delay1, 90*time.Millisecond, "第一次延迟应该约为 100ms")
-	assert.LessOrEqual(t, delay1, 110*time.Millisecond, "第一次延迟应该约为 100ms")
+	// 第一次延迟应该约为 1s
+	assert.GreaterOrEqual(t, delay1, 900*time.Millisecond, "第一次延迟应该约为 1s")
+	assert.LessOrEqual(t, delay1, 1100*time.Millisecond, "第一次延迟应该约为 1s")
 
-	// 第二次延迟应该约为 200ms（指数退避）
-	assert.GreaterOrEqual(t, delay2, 190*time.Millisecond, "第二次延迟应该约为 200ms")
-	assert.LessOrEqual(t, delay2, 210*time.Millisecond, "第二次延迟应该约为 200ms")
+	// 第二次延迟应该约为 2s（指数退避）
+	assert.GreaterOrEqual(t, delay2, 1900*time.Millisecond, "第二次延迟应该约为 2s")
+	assert.LessOrEqual(t, delay2, 2100*time.Millisecond, "第二次延迟应该约为 2s")
 }
 
 func TestRetryWithBackoff_MaxDelay(t *testing.T) {
 	ctx := context.Background()
 	config := RetryConfig{
 		MaxAttempts:  5,
-		InitialDelay: 100 * time.Millisecond,
-		MaxDelay:     150 * time.Millisecond,
+		InitialDelay: 1,    // 1 秒
+		MaxDelay:     2,    // 2 秒
 		Multiplier:   10.0, // 大倍增因子以快速达到最大延迟
 		Jitter:       false,
 	}
@@ -238,10 +238,10 @@ func TestRetryWithBackoff_MaxDelay(t *testing.T) {
 
 	require.Len(t, timestamps, 5, "应该有 5 次尝试")
 
-	// 所有后续延迟都不应超过 MaxDelay
+	// 所有后续延迟都不应超过 MaxDelay (2s)
 	for i := 1; i < len(timestamps); i++ {
 		delay := timestamps[i].Sub(timestamps[i-1])
-		assert.LessOrEqual(t, delay, 160*time.Millisecond, "延迟不应超过 MaxDelay")
+		assert.LessOrEqual(t, delay, 2100*time.Millisecond, "延迟不应超过 MaxDelay")
 	}
 }
 

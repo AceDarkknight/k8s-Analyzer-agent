@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-mcp/pkg/mcpclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -24,11 +26,11 @@ type Config struct {
 	// Insecure 是否跳过 TLS 验证（仅用于开发环境）
 	Insecure bool `json:"insecure"`
 
-	// Timeout 请求超时时间
-	Timeout time.Duration `json:"timeout"`
+	// Timeout 请求超时时间（秒）
+	Timeout int `json:"timeout"`
 
 	// RetryConfig 重试配置
-	RetryConfig RetryConfig `json:"retry_config"`
+	RetryConfig client.RetryConfig `json:"retry_config"`
 
 	// SSEPath SSE 端点路径（默认为 "/sse"）
 	SSEPath string `json:"sse_path"`
@@ -50,11 +52,11 @@ func (c *Config) Validate() error {
 	}
 
 	if c.Timeout <= 0 {
-		c.Timeout = 30 * time.Second // 默认 30 秒
+		c.Timeout = 30 // 默认 30 秒
 	}
 
 	if c.RetryConfig.MaxAttempts <= 0 {
-		c.RetryConfig = DefaultRetryConfig()
+		c.RetryConfig = client.DefaultRetryConfig()
 	}
 
 	if c.SSEPath == "" {
@@ -89,22 +91,6 @@ type Content interface{}
 type Tool struct {
 	Name        string
 	Description string
-}
-
-// RetryConfig 重试配置
-type RetryConfig struct {
-	MaxAttempts int           `json:"max_attempts"` // 最大重试次数
-	InitialWait time.Duration `json:"initial_wait"` // 初始等待时间
-	MaxWait     time.Duration `json:"max_wait"`     // 最大等待时间
-}
-
-// DefaultRetryConfig 返回默认的重试配置
-func DefaultRetryConfig() RetryConfig {
-	return RetryConfig{
-		MaxAttempts: 3,
-		InitialWait: 1 * time.Second,
-		MaxWait:     10 * time.Second,
-	}
 }
 
 // ConnectionError 连接错误
@@ -152,20 +138,25 @@ func NewClient(config Config) (Client, error) {
 
 // NewClientFromFile 从配置文件创建 K8s MCP Client
 func NewClientFromFile(configPath string) (Client, error) {
-	config := Config{
-		ServerURL: "https://localhost:8443",
-		Token:     "mock-token",
-		Insecure:  true,
-		Timeout:   30 * time.Second,
-		RetryConfig: RetryConfig{
-			MaxAttempts: 3,
-			InitialWait: 1 * time.Second,
-			MaxWait:     10 * time.Second,
-		},
-		SSEPath: "/sse",
+	config, err := client.LoadConfig[Config](configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	return NewClient(config)
+	// 从环境变量读取配置，覆盖配置文件中的值
+	// 优先级：环境变量 > 配置文件
+	if envURL := os.Getenv("K8S_MCP_URL"); envURL != "" {
+		config.ServerURL = envURL
+		fmt.Printf("Using K8S_MCP_URL from environment variable: %s\n", envURL)
+	}
+
+	if envToken := os.Getenv("K8S_MCP_TOKEN"); envToken != "" {
+		config.Token = envToken
+		fmt.Println("Using K8S_MCP_TOKEN from environment variable")
+
+	}
+
+	return NewClient(*config)
 }
 
 // NewRealClient 创建真实的 K8s MCP Client

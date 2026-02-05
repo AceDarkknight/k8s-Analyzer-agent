@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/cloudwego/eino/compose"
 )
@@ -29,9 +30,9 @@ type Agent struct {
 }
 
 // NewAgent 创建新的 Analysis Agent
-func NewAgent(k8sClient K8sClient, safetyAgent SafetyAgent) (*Agent, error) {
-	// 创建基于规则的 LLM（默认）
-	llm := NewRuleBasedLLM()
+func NewAgent(k8sClient K8sClient, safetyAgent SafetyAgent, llmConfig *config.LLMConfig) (*Agent, error) {
+	// 创建基于规则的 LLM（传入配置）
+	llm := NewRuleBasedLLM(llmConfig)
 
 	agent := &Agent{
 		k8sClient:   k8sClient,

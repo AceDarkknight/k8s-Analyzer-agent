@@ -5,7 +5,6 @@ import (
 	"context"
 	"os"
 	"testing"
-	"time"
 
 	clientpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/stretchr/testify/assert"
@@ -97,7 +96,7 @@ func TestConfig_Validate(t *testing.T) {
 			} else {
 				assert.NoError(t, err, "不应该返回错误")
 				// 验证默认值
-				assert.Equal(t, 30*time.Second, tt.config.Timeout, "应该设置默认超时")
+				assert.Equal(t, 30, tt.config.Timeout, "应该设置默认超时")
 				assert.Equal(t, 3, tt.config.RetryConfig.MaxAttempts, "应该设置默认重试次数")
 				assert.Equal(t, "/sse", tt.config.SSEPath, "应该设置默认 SSE 路径")
 			}
@@ -144,7 +143,7 @@ func TestNewClient(t *testing.T) {
 				// 预期配置包含默认值
 				expectedConfig := tt.config
 				if expectedConfig.Timeout == 0 {
-					expectedConfig.Timeout = 30 * time.Second
+					expectedConfig.Timeout = 30
 				}
 				if expectedConfig.RetryConfig.MaxAttempts == 0 {
 					expectedConfig.RetryConfig = clientpkg.DefaultRetryConfig()
@@ -183,7 +182,7 @@ func TestClient_GetConfig(t *testing.T) {
 		Servers: []ServerConfig{
 			{Name: "server1", URL: "http://localhost:8080", Token: "test-token"},
 		},
-		Timeout:        60 * time.Second,
+		Timeout:        60,
 		EnableFailover: true,
 	}
 
@@ -258,7 +257,7 @@ func TestClient_UpdateConfig(t *testing.T) {
 	// 预期配置包含默认值
 	expectedConfig := newConfig
 	if expectedConfig.Timeout == 0 {
-		expectedConfig.Timeout = 30 * time.Second
+		expectedConfig.Timeout = 30
 	}
 	if expectedConfig.RetryConfig.MaxAttempts == 0 {
 		expectedConfig.RetryConfig = clientpkg.DefaultRetryConfig()

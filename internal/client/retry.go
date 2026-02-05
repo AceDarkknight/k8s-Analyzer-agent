@@ -12,27 +12,27 @@ import (
 // RetryConfig 定义重试配置
 type RetryConfig struct {
 	// MaxAttempts 最大重试次数（包括首次尝试）
-	MaxAttempts int
+	MaxAttempts int `json:"max_attempts"`
 
-	// InitialDelay 初始延迟时间
-	InitialDelay time.Duration
+	// InitialDelay 初始延迟时间（秒）
+	InitialDelay int `json:"initial_delay"`
 
-	// MaxDelay 最大延迟时间
-	MaxDelay time.Duration
+	// MaxDelay 最大延迟时间（秒）
+	MaxDelay int `json:"max_delay"`
 
 	// Multiplier 延迟倍增因子（指数退避）
-	Multiplier float64
+	Multiplier float64 `json:"multiplier"`
 
 	// Jitter 是否添加随机抖动
-	Jitter bool
+	Jitter bool `json:"jitter"`
 }
 
 // DefaultRetryConfig 返回默认的重试配置
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
-		MaxAttempts:  3, // 最大重试 3 次
-		InitialDelay: 1 * time.Second,
-		MaxDelay:     10 * time.Second,
+		MaxAttempts:  3,    // 最大重试 3 次
+		InitialDelay: 1,    // 1 秒
+		MaxDelay:     10,   // 10 秒
 		Multiplier:   2.0,  // 指数增长
 		Jitter:       true, // 添加随机抖动避免惊群效应
 	}
@@ -54,7 +54,7 @@ func RetryWithBackoff(ctx context.Context, config RetryConfig, fn RetryFunc) err
 	}
 
 	var lastErr error
-	delay := config.InitialDelay
+	delay := time.Duration(config.InitialDelay) * time.Second
 
 	for attempt := 0; attempt < config.MaxAttempts; attempt++ {
 		// 执行函数
@@ -89,8 +89,9 @@ func RetryWithBackoff(ctx context.Context, config RetryConfig, fn RetryFunc) err
 		}
 
 		// 限制最大延迟
-		if waitTime > config.MaxDelay {
-			waitTime = config.MaxDelay
+		maxDelayDuration := time.Duration(config.MaxDelay) * time.Second
+		if waitTime > maxDelayDuration {
+			waitTime = maxDelayDuration
 		}
 
 		// 确保等待时间为正数
@@ -109,7 +110,7 @@ func RetryWithBackoff(ctx context.Context, config RetryConfig, fn RetryFunc) err
 		// 计算下一次的延迟时间（指数退避）
 		delay = time.Duration(math.Min(
 			float64(delay)*config.Multiplier,
-			float64(config.MaxDelay),
+			float64(maxDelayDuration),
 		))
 	}
 
@@ -130,7 +131,7 @@ func RetryWithContext(ctx context.Context, config RetryConfig, fn func(context.C
 	}
 
 	var lastErr error
-	delay := config.InitialDelay
+	delay := time.Duration(config.InitialDelay) * time.Second
 
 	for attempt := 0; attempt < config.MaxAttempts; attempt++ {
 		// 执行函数
@@ -164,8 +165,9 @@ func RetryWithContext(ctx context.Context, config RetryConfig, fn func(context.C
 		}
 
 		// 限制最大延迟
-		if waitTime > config.MaxDelay {
-			waitTime = config.MaxDelay
+		maxDelayDuration := time.Duration(config.MaxDelay) * time.Second
+		if waitTime > maxDelayDuration {
+			waitTime = maxDelayDuration
 		}
 
 		// 确保等待时间为正数
@@ -184,7 +186,7 @@ func RetryWithContext(ctx context.Context, config RetryConfig, fn func(context.C
 		// 计算下一次的延迟时间（指数退避）
 		delay = time.Duration(math.Min(
 			float64(delay)*config.Multiplier,
-			float64(config.MaxDelay),
+			float64(maxDelayDuration),
 		))
 	}
 
@@ -208,7 +210,7 @@ func RetryWithResult[T any](ctx context.Context, config RetryConfig, fn func() (
 
 	var lastResult T
 	var lastErr error
-	delay := config.InitialDelay
+	delay := time.Duration(config.InitialDelay) * time.Second
 
 	for attempt := 0; attempt < config.MaxAttempts; attempt++ {
 		// 执行函数
@@ -243,8 +245,9 @@ func RetryWithResult[T any](ctx context.Context, config RetryConfig, fn func() (
 		}
 
 		// 限制最大延迟
-		if waitTime > config.MaxDelay {
-			waitTime = config.MaxDelay
+		maxDelayDuration := time.Duration(config.MaxDelay) * time.Second
+		if waitTime > maxDelayDuration {
+			waitTime = maxDelayDuration
 		}
 
 		// 确保等待时间为正数
@@ -263,7 +266,7 @@ func RetryWithResult[T any](ctx context.Context, config RetryConfig, fn func() (
 		// 计算下一次的延迟时间（指数退避）
 		delay = time.Duration(math.Min(
 			float64(delay)*config.Multiplier,
-			float64(config.MaxDelay),
+			float64(maxDelayDuration),
 		))
 	}
 
