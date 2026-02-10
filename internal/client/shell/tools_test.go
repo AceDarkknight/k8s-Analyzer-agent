@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	mcpConfig "github.com/AceDarkknight/shell-executor-mcp/pkg/configs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -401,8 +402,10 @@ func TestExecuteResult_FormatSummary(t *testing.T) {
 
 func TestClient_ExecuteCommand_EmptyCommand(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -417,8 +420,10 @@ func TestClient_ExecuteCommand_EmptyCommand(t *testing.T) {
 
 func TestClient_ExecuteCommand_NotConnected(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -433,8 +438,10 @@ func TestClient_ExecuteCommand_NotConnected(t *testing.T) {
 
 func TestClient_ExecuteCommandWithTimeout_EmptyCommand(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -496,8 +503,10 @@ func TestClient_ExecuteCommand_Integration(t *testing.T) {
 	}
 
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 

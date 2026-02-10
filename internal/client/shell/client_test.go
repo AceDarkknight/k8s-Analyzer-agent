@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	clientpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
+	mcpConfig "github.com/AceDarkknight/shell-executor-mcp/pkg/configs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,8 +22,10 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "valid config with one server",
 			config: Config{
-				Servers: []ServerConfig{
-					{Name: "server1", URL: "http://localhost:8080"},
+				McpConfig: mcpConfig.ClientConfig{
+					Servers: []mcpConfig.ServerConfig{
+						{Name: "server1", URL: "http://localhost:8080"},
+					},
 				},
 			},
 			expectError: false,
@@ -30,24 +33,28 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "valid config with multiple servers",
 			config: Config{
-				Servers: []ServerConfig{
-					{Name: "server1", URL: "http://localhost:8080"},
-					{Name: "server2", URL: "http://localhost:8081"},
+				McpConfig: mcpConfig.ClientConfig{
+					Servers: []mcpConfig.ServerConfig{
+						{Name: "server1", URL: "http://localhost:8080"},
+						{Name: "server2", URL: "http://localhost:8081"},
+					},
 				},
 			},
 			expectError: false,
 		},
 		{
 			name:        "empty servers",
-			config:      Config{Servers: []ServerConfig{}},
+			config:      Config{McpConfig: mcpConfig.ClientConfig{Servers: []mcpConfig.ServerConfig{}}},
 			expectError: true,
 			errorMsg:    "at least one server is required",
 		},
 		{
 			name: "server without name",
 			config: Config{
-				Servers: []ServerConfig{
-					{URL: "http://localhost:8080"},
+				McpConfig: mcpConfig.ClientConfig{
+					Servers: []mcpConfig.ServerConfig{
+						{URL: "http://localhost:8080"},
+					},
 				},
 			},
 			expectError: true,
@@ -56,8 +63,10 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "server without url",
 			config: Config{
-				Servers: []ServerConfig{
-					{Name: "server1"},
+				McpConfig: mcpConfig.ClientConfig{
+					Servers: []mcpConfig.ServerConfig{
+						{Name: "server1"},
+					},
 				},
 			},
 			expectError: true,
@@ -66,8 +75,10 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "invalid url",
 			config: Config{
-				Servers: []ServerConfig{
-					{Name: "server1", URL: "://invalid"},
+				McpConfig: mcpConfig.ClientConfig{
+					Servers: []mcpConfig.ServerConfig{
+						{Name: "server1", URL: "://invalid"},
+					},
 				},
 			},
 			expectError: true,
@@ -76,8 +87,10 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "config with defaults",
 			config: Config{
-				Servers: []ServerConfig{
-					{Name: "server1", URL: "http://localhost:8080"},
+				McpConfig: mcpConfig.ClientConfig{
+					Servers: []mcpConfig.ServerConfig{
+						{Name: "server1", URL: "http://localhost:8080"},
+					},
 				},
 			},
 			expectError: false,
@@ -113,8 +126,10 @@ func TestNewClient(t *testing.T) {
 		{
 			name: "valid config",
 			config: Config{
-				Servers: []ServerConfig{
-					{Name: "server1", URL: "http://localhost:8080"},
+				McpConfig: mcpConfig.ClientConfig{
+					Servers: []mcpConfig.ServerConfig{
+						{Name: "server1", URL: "http://localhost:8080"},
+					},
 				},
 			},
 			expectError: false,
@@ -122,7 +137,9 @@ func TestNewClient(t *testing.T) {
 		{
 			name: "invalid config",
 			config: Config{
-				Servers: []ServerConfig{},
+				McpConfig: mcpConfig.ClientConfig{
+					Servers: []mcpConfig.ServerConfig{},
+				},
 			},
 			expectError: true,
 		},
@@ -166,8 +183,10 @@ func TestNewClientFromFile(t *testing.T) {
 
 func TestClient_IsConnected(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -179,8 +198,11 @@ func TestClient_IsConnected(t *testing.T) {
 
 func TestClient_GetConfig(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080", Token: "test-token"},
+		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 		Timeout:        60,
 		EnableFailover: true,
@@ -204,8 +226,10 @@ func TestClient_GetConfig(t *testing.T) {
 
 func TestClient_GetCurrentServer(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -219,8 +243,10 @@ func TestClient_GetCurrentServer(t *testing.T) {
 
 func TestClient_Close(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -235,8 +261,10 @@ func TestClient_Close(t *testing.T) {
 
 func TestClient_UpdateConfig(t *testing.T) {
 	oldConfig := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 		EnableFailover: false,
 	}
@@ -245,8 +273,10 @@ func TestClient_UpdateConfig(t *testing.T) {
 	require.NoError(t, err, "创建 client 不应失败")
 
 	newConfig := Config{
-		Servers: []ServerConfig{
-			{Name: "server2", URL: "http://localhost:8081"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server2", URL: "http://localhost:8081"},
+			},
 		},
 		EnableFailover: true,
 	}
@@ -273,8 +303,10 @@ func TestClient_UpdateConfig(t *testing.T) {
 
 func TestClient_UpdateConfig_Invalid(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -282,7 +314,9 @@ func TestClient_UpdateConfig_Invalid(t *testing.T) {
 	require.NoError(t, err, "创建 client 不应失败")
 
 	invalidConfig := Config{
-		Servers: []ServerConfig{},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{},
+		},
 	}
 
 	err = client.UpdateConfig(invalidConfig)
@@ -291,8 +325,10 @@ func TestClient_UpdateConfig_Invalid(t *testing.T) {
 
 func TestClient_Connect_NotConnected(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -307,8 +343,10 @@ func TestClient_Connect_NotConnected(t *testing.T) {
 
 func TestClient_Connect_AlreadyConnected(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -325,8 +363,10 @@ func TestClient_Connect_AlreadyConnected(t *testing.T) {
 
 func TestClient_CallTool_NotConnected(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -341,8 +381,10 @@ func TestClient_CallTool_NotConnected(t *testing.T) {
 
 func TestClient_ListTools_NotConnected(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -357,8 +399,10 @@ func TestClient_ListTools_NotConnected(t *testing.T) {
 
 func TestClient_HealthCheck_NotConnected(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -373,8 +417,10 @@ func TestClient_HealthCheck_NotConnected(t *testing.T) {
 
 func TestClient_isConnectionError(t *testing.T) {
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 	}
 
@@ -428,8 +474,10 @@ func TestClient_Integration(t *testing.T) {
 	}
 
 	config := Config{
-		Servers: []ServerConfig{
-			{Name: "server1", URL: "http://localhost:8080"},
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
 		},
 		EnableFailover: true,
 	}

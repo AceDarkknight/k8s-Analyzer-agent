@@ -7,6 +7,7 @@ import (
 	"time"
 
 	clientpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
+	mcpConfig "github.com/AceDarkknight/shell-executor-mcp/pkg/configs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -28,10 +29,12 @@ func NewMockClient(config Config) *MockClient {
 // NewMockClientFromFile 从配置文件创建 Mock Shell Client
 func NewMockClientFromFile(configPath string) (*MockClient, error) {
 	config := Config{
-		Servers: []ServerConfig{
-			{
-				Name: "default",
-				URL:  "http://localhost:8080",
+		McpConfig: mcpConfig.ClientConfig{
+			Servers: []mcpConfig.ServerConfig{
+				{
+					Name: "default",
+					URL:  "http://localhost:8080",
+				},
 			},
 		},
 		Timeout: 30, // 30 秒

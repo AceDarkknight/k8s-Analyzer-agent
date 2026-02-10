@@ -3,8 +3,8 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"time"
@@ -12,26 +12,15 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/AceDarkknight/shell-executor-mcp/pkg/configs"
+	mcpConfig "github.com/AceDarkknight/shell-executor-mcp/pkg/configs"
 	"github.com/AceDarkknight/shell-executor-mcp/pkg/mcpclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// ServerConfig 定义单个 Shell Executor Server 的配置
-type ServerConfig struct {
-	// Name 服务器名称（用于标识）
-	Name string `json:"name"`
-
-	// URL 服务器地址（如 "http://localhost:8080"）
-	URL string `json:"url"`
-
-	// Token 认证 Token（可选）
-	Token string `json:"token,omitempty"`
-}
-
 // Config 定义 Shell Executor MCP Client 的配置
 type Config struct {
-	// Servers 服务器列表（支持故障转移）
-	Servers []ServerConfig `json:"servers"`
+	// mcpConfig 包含服务器列表和连接 Token 等信息
+	McpConfig mcpConfig.ClientConfig `json:"mcp_config"`
 
 	// Timeout 请求超时时间（秒）
 	Timeout int `json:"timeout"`
@@ -48,11 +37,11 @@ type Config struct {
 
 // Validate 验证配置是否有效
 func (c *Config) Validate() error {
-	if len(c.Servers) == 0 {
+	if len(c.McpConfig.Servers) == 0 {
 		return fmt.Errorf("at least one server is required")
 	}
 
-	for i, server := range c.Servers {
+	for i, server := range c.McpConfig.Servers {
 		if server.Name == "" {
 			return fmt.Errorf("server[%d]: name is required", i)
 		}
@@ -62,6 +51,9 @@ func (c *Config) Validate() error {
 		// 验证 URL 格式
 		if _, err := url.Parse(server.URL); err != nil {
 			return fmt.Errorf("server[%d]: invalid url: %w", i, err)
+		}
+		if c.McpConfig.Token == "" {
+			return fmt.Errorf("server[%d]: token is empty", i)
 		}
 	}
 
@@ -85,7 +77,6 @@ type Client struct {
 	config       Config
 	mcpClient    *mcpclient.Client
 	mcpSession   *mcp.ClientSession
-	httpClient   *http.Client
 	connected    bool
 	currentIndex int // 当前使用的服务器索引
 }
@@ -104,20 +95,19 @@ func NewRealClient(config *Config) (*Client, error) {
 	}
 
 	// 创建 mcpclient.Config
-	servers := make([]configs.ServerConfig, len(config.Servers))
-	for i, s := range config.Servers {
+	servers := make([]configs.ServerConfig, len(config.McpConfig.Servers))
+	for i, s := range config.McpConfig.Servers {
 		servers[i] = configs.ServerConfig{Name: s.Name, URL: s.URL}
 	}
-	mcpConfig := &configs.ClientConfig{
-		Servers: servers,
-		Log: configs.LogConfig{
-			Level:  "info",
-			LogDir: "logs/shell",
-		},
-	}
 
+	opts := make([]mcpclient.Option, 0)
+	opts = append(opts,
+		mcpclient.WithHeader("X-Cluster-Token", config.McpConfig.Token),
+		mcpclient.WithTimeout(time.Duration(config.Timeout)*time.Second),
+		mcpclient.WithLogger(logger.GetSugar()),
+	)
 	// 创建 mcpclient.Client
-	mcpClient, err := mcpclient.NewClient(mcpConfig)
+	mcpClient, err := mcpclient.NewClient(&config.McpConfig, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create mcp client: %w", err)
 	}
@@ -231,33 +221,34 @@ func NewClientFromFile(configPath string) (*Client, error) {
 	}
 
 	// 如果配置文件中没有 servers，使用默认值
-	if len(config.Servers) == 0 {
-		config.Servers = []ServerConfig{
-			{
-				Name: "default",
-				URL:  "http://localhost:8080",
-			},
-		}
+	if len(config.McpConfig.Servers) == 0 {
+		return nil, fmt.Errorf("config must contain at least one server")
 	}
 
 	// 从环境变量读取配置，覆盖配置文件中的值
 	// 优先级：环境变量 > 配置文件
 	if envURL := os.Getenv("SHELL_MCP_URL"); envURL != "" {
 		// 覆盖第一个服务器的 URL
-		config.Servers[0].URL = envURL
+		config.McpConfig.Servers[0].URL = envURL
 		logger.Info("Using SHELL_MCP_URL from environment variable", logger.String("url", envURL))
 	}
 
 	if envToken := os.Getenv("SHELL_MCP_TOKEN"); envToken != "" {
 		// 覆盖第一个服务器的 Token
-		config.Servers[0].Token = envToken
+		config.McpConfig.Token = envToken
 		logger.Info("Using SHELL_MCP_TOKEN from environment variable")
+	}
+
+	// 验证最终的 URL 不为空
+	if config.McpConfig.Servers[0].URL == "" {
+		return nil, fmt.Errorf("server URL is empty: please set a valid URL in config file or use SHELL_MCP_URL environment variable")
 	}
 
 	return NewRealClient(config)
 }
 
 // Connect 建立与 Shell Executor MCP Server 的连接
+// 使用强制超时机制，确保即使底层库阻塞也能在超时后返回
 func (c *Client) Connect(ctx context.Context) error {
 	if c.connected {
 		logger.Debug("Already connected to Shell MCP Server")
@@ -266,19 +257,69 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	logger.Info("Attempting to connect to Shell MCP Server")
 
-	// 使用 mcpclient 连接
-	if err := c.mcpClient.Connect(ctx); err != nil {
-		return &client.ConnectionError{
-			Reason: "failed to connect to MCP server",
-			Err:    err,
-		}
+	// 创建带超时的 context（如果传入的 ctx 没有超时）
+	connectCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		// 如果没有设置超时，使用配置的超时时间
+		var cancel context.CancelFunc
+		timeout := time.Duration(c.config.Timeout) * time.Second
+		connectCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+		logger.Info("Using default connection timeout", logger.Int("timeout_seconds", c.config.Timeout))
 	}
 
-	// 连接成功
-	c.mcpSession = c.mcpClient.GetSession()
-	c.connected = true
-	logger.Info("Successfully connected to Shell MCP Server")
-	return nil
+	// 使用 goroutine + select 实现强制超时
+	// 使用缓冲通道避免 goroutine 泄漏
+	resultChan := make(chan error, 1)
+	successChan := make(chan struct{}, 1)
+	defer close(resultChan)
+	defer close(successChan)
+
+	// 在 goroutine 中执行连接操作
+	go func() {
+		logger.Debug("Starting connection goroutine")
+		if err := c.mcpClient.Connect(connectCtx); err != nil {
+			logger.Error("Connection attempt failed", logger.Err(err))
+			resultChan <- err
+			return
+		} else {
+			logger.Info("Successfully connected to Shell MCP Server")
+			successChan <- struct{}{}
+		}
+		logger.Debug("Connection goroutine completed")
+	}()
+
+	// 等待连接结果或超时
+	select {
+	case <-successChan:
+		// 连接成功
+		c.mcpSession = c.mcpClient.GetSession()
+		c.connected = true
+		logger.Info("Successfully connected to Shell MCP Server")
+		return nil
+	case err := <-resultChan:
+		// 连接失败
+		if err != nil {
+			logger.Error("Connection failed", logger.Err(err))
+			return &client.ConnectionError{
+				Reason: "failed to connect to MCP server",
+				Err:    err,
+			}
+		} else {
+			logger.Error("unknown error")
+			return &client.ConnectionError{
+				Reason: "unknown error during connection",
+				Err:    errors.New("unknown error during connection"),
+			}
+		}
+	case <-connectCtx.Done():
+		// 超时或 context 被取消
+		logger.Error("Connection timeout or cancelled", logger.Err(connectCtx.Err()))
+		return &client.ConnectionError{
+			Reason: "connection timeout or cancelled",
+			Err:    connectCtx.Err(),
+		}
+	}
 }
 
 // Close 终止与 Shell Executor MCP Server 的连接
@@ -380,11 +421,11 @@ func (c *Client) GetConfig() Config {
 }
 
 // GetCurrentServer 返回当前连接的服务器配置
-func (c *Client) GetCurrentServer() *ServerConfig {
-	if !c.connected || c.currentIndex >= len(c.config.Servers) {
+func (c *Client) GetCurrentServer() *mcpConfig.ServerConfig {
+	if !c.connected || c.currentIndex >= len(c.config.McpConfig.Servers) {
 		return nil
 	}
-	return &c.config.Servers[c.currentIndex]
+	return &c.config.McpConfig.Servers[c.currentIndex]
 }
 
 // isConnectionError 判断错误是否为连接错误
@@ -422,11 +463,5 @@ func (c *Client) UpdateConfig(config Config) error {
 
 	// 更新配置
 	c.config = config
-
-	// 更新 HTTP Client
-	c.httpClient = &http.Client{
-		Timeout: time.Duration(config.Timeout) * time.Second,
-	}
-
 	return nil
 }

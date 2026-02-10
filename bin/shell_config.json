@@ -1,11 +1,13 @@
 {
-  "servers": [
+  "mcp_config": {
+    "servers": [
     {
       "name": "default",
-      "url": "",
-      "token": ""
+      "url": ""
     }
   ],
+    "token": ""
+  },
   "timeout": 30,
   "retry_config": {
     "max_attempts": 3,

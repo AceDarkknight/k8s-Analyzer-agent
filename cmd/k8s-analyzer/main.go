@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/analysis"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
@@ -83,14 +84,9 @@ func main() {
 	logger.Info("步骤 3: 初始化 Shell Client...")
 	shellClient, err := shell.NewClientFromFile(shellConfigPath)
 	if err != nil {
-		logger.Error("Shell Client 初始化失败", logger.Err(err))
+		logger.Fatal("创建 Shell Client 失败", logger.Err(err))
 	} else {
-		logger.Info("Shell Client 初始化成功")
-	}
-
-	// 如果 Shell Client 初始化失败，无法继续
-	if shellClient == nil {
-		logger.Fatal("Shell Client 未初始化，无法继续")
+		logger.Info("创建 Shell Client 成功")
 	}
 
 	// 4. 初始化 Safety Agent
@@ -115,10 +111,10 @@ func main() {
 	logger.Info("步骤 6: 尝试连接 K8s Client...")
 	if k8sClient != nil {
 		if err := k8sClient.Connect(ctx); err != nil {
-			logger.Warn("K8s Client 连接失败 (预期行为)", logger.Err(err))
-		} else {
-			logger.Info("K8s Client 连接成功")
+			logger.Fatal("K8s Client 连接失败", logger.Err(err))
 		}
+
+		logger.Info("K8s Client 连接成功")
 		defer func() {
 			if err := k8sClient.Close(); err != nil {
 				logger.Error("K8s Client 关闭失败", logger.Err(err))
@@ -127,18 +123,27 @@ func main() {
 	}
 
 	// 7. 跳过 Shell Client 连接（预期会失败，因为没有真实的 MCP Server）
-	logger.Info("步骤 7: 跳过 Shell Client 连接...")
-	logger.Warn("Shell Client 连接被跳过 (预期行为)")
-	logger.Info("注意: 这是因为没有真实的 MCP Server 运行")
-	defer func() {
-		if err := shellClient.Close(); err != nil {
-			logger.Error("Shell Client 关闭失败", logger.Err(err))
-		}
-	}()
+	logger.Info("步骤 7: 尝试连接 Shell Client...")
+
+	// 创建带超时的 context (10秒超时)
+	connectCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	if err := shellClient.Connect(connectCtx); err != nil {
+		logger.Fatal("Shell Client 连接失败", logger.Err(err))
+	} else {
+		logger.Info("Shell Client 连接成功")
+		defer func() {
+			// 清理已连接的资源
+			if err := shellClient.Close(); err != nil {
+				logger.Error("Shell Client 关闭失败", logger.Err(err))
+			}
+		}()
+	}
 
 	// 8. 启动 Agent 并传入示例参数
 	logger.Info("步骤 8: 启动 Analysis Agent 进行分析...")
-	userInput := "分析 default 命名空间中的 Pod 状态"
+	userInput := "分析所有命名空间中的 Pod 状态"
 	logger.Info("用户输入", logger.String("input", userInput))
 
 	result, err := analysisAgent.Run(ctx, userInput)

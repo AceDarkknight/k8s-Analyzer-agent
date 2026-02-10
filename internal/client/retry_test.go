@@ -106,7 +106,7 @@ func TestRetryWithResult_Success(t *testing.T) {
 		return "success", nil
 	}
 
-	result, err := RetryWithResult[string](ctx, config, fn)
+	result, err := RetryWithResult(ctx, config, fn)
 
 	assert.NoError(t, err, "应该成功")
 	assert.Equal(t, "success", result, "结果应该正确")
@@ -123,7 +123,7 @@ func TestRetryWithResult_AllFail(t *testing.T) {
 		return "", &ConnectionError{Reason: "persistent error"}
 	}
 
-	result, err := RetryWithResult[string](ctx, config, fn)
+	result, err := RetryWithResult(ctx, config, fn)
 
 	assert.Error(t, err, "应该失败")
 	assert.Equal(t, "", result, "结果应为空")
