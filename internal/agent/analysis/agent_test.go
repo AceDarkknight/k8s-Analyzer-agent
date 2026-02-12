@@ -56,6 +56,13 @@ func TestNewAgent(t *testing.T) {
 	// 创建 Mock K8s Client
 	k8sClient := k8s.NewMockClient(k8s.Config{})
 
+	// 连接 K8s Client (mock client 需要连接才能使用)
+	ctx := context.Background()
+	if err := k8sClient.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect K8s client: %v", err)
+	}
+	defer k8sClient.Close()
+
 	// 创建 Mock Safety Agent
 	safetyAgent := NewMockSafetyAgent()
 

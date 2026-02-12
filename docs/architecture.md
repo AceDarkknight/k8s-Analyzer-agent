@@ -184,6 +184,21 @@ type MCPClient interface {
 *   **Analysis Node**: 利用 LLM 分析收集到的数据，决定下一步行动（跳转到日志节点、Shell 节点或输出结论）。
 *   **Tool Execution Node**: 执行具体的 MCP 工具（如 `execute_command`）。
 
+### 4.3 动态工具发现与 LLM 集成 (Dynamic Tool Discovery & LLM Integration)
+
+为了确保 Agent 始终能够利用最新的 MCP 工具能力，系统引入了动态工具发现机制。
+
+**Agent 初始化流程**:
+1.  **启动**: Agent 启动时，初始化 MCP Client 并连接到配置的 MCP Server (如 K8s MCP Server, Shell Executor MCP Server)。
+2.  **工具发现**: 成功连接后，Agent 立即调用 `ListTools` 接口，向所有连接的 MCP Server 查询当前可用的工具列表及其 schema 定义。
+    *   如果工具列表获取失败，Agent 将视为致命错误并停止启动，以防止在功能缺失的情况下运行。
+3.  **Prompt 构建**: 获取到的工具定义将被动态注入到 LLM 的 System Prompt 中。
+    *   System Prompt 包含：角色定义 + 任务目标 + **动态工具描述** + 输出格式要求。
+    *   这种机制使得当底层 MCP Server 升级并增加新工具时，Agent 无需修改代码即可自动获得新能力。
+
+**LLM 集成更新**:
+*   **动态提示词**: LLM 的 Prompt 不再包含硬编码的工具列表。相反，它会在运行时根据 `ListTools` 的结果构建工具描述部分。这确保了 LLM 总是知道当前环境确切支持哪些操作。
+
 ## 5. 接口设计
 
 ### 5.1 主 Agent 接口

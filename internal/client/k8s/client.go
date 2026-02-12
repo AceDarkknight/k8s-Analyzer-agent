@@ -4,6 +4,7 @@ package k8s
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -72,7 +73,7 @@ type Client interface {
 	Connect(ctx context.Context) error
 	Close() error
 	CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error)
-	ListTools(ctx context.Context) ([]Tool, error)
+	ListTools(ctx context.Context) ([]client.Tool, error)
 	IsConnected() bool
 	HealthCheck(ctx context.Context) error
 	GetConfig() Config
@@ -86,12 +87,6 @@ type CallToolResult struct {
 
 // Content 内容接口
 type Content interface{}
-
-// Tool 工具定义
-type Tool struct {
-	Name        string
-	Description string
-}
 
 // ConnectionError 连接错误
 type ConnectionError struct {
@@ -215,6 +210,7 @@ func (c *RealClient) Close() error {
 }
 
 // CallTool 调用工具
+// 使用重试机制实现降级保护（Downgrade Protection）
 func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error) {
 	if !c.connected {
 		return nil, &ToolExecutionError{
@@ -223,11 +219,23 @@ func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]
 		}
 	}
 
-	result, err := c.mcpClient.CallTool(ctx, name, args)
+	// 使用重试机制执行工具调用
+	result, err := client.RetryWithResult(
+		ctx,
+		c.config.RetryConfig,
+		func() (*mcp.CallToolResult, error) {
+			result, err := c.mcpClient.CallTool(ctx, name, args)
+			if err != nil {
+				return nil, err
+			}
+			return result, nil
+		},
+	)
+
 	if err != nil {
 		return nil, &ToolExecutionError{
 			ToolName: name,
-			Reason:   "failed to call tool",
+			Reason:   "failed to call tool after retries",
 			Err:      err,
 		}
 	}
@@ -241,7 +249,7 @@ func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]
 }
 
 // ListTools 获取工具列表
-func (c *RealClient) ListTools(ctx context.Context) ([]Tool, error) {
+func (c *RealClient) ListTools(ctx context.Context) ([]client.Tool, error) {
 	if !c.connected {
 		return nil, fmt.Errorf("client not connected")
 	}
@@ -251,12 +259,23 @@ func (c *RealClient) ListTools(ctx context.Context) ([]Tool, error) {
 		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
 
-	// 转换 mcp.Tool 为 Tool
-	result := make([]Tool, 0, len(tools))
+	// 转换 mcp.Tool 为 client.Tool
+	result := make([]client.Tool, 0, len(tools))
 	for _, tool := range tools {
-		result = append(result, Tool{
+		// 序列化 InputSchema 为 json.RawMessage
+		var inputSchema json.RawMessage
+		if tool.InputSchema != nil {
+			schemaBytes, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal input schema for tool %s: %w", tool.Name, err)
+			}
+			inputSchema = schemaBytes
+		}
+
+		result = append(result, client.Tool{
 			Name:        tool.Name,
 			Description: tool.Description,
+			InputSchema: inputSchema,
 		})
 	}
 

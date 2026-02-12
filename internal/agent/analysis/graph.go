@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/cloudwego/eino/compose"
@@ -27,6 +28,7 @@ type Agent struct {
 	k8sClient   K8sClient
 	safetyAgent SafetyAgent
 	llm         LLM
+	tools       []client.Tool // 动态加载的工具列表
 }
 
 // NewAgent 创建新的 Analysis Agent
@@ -38,6 +40,13 @@ func NewAgent(k8sClient K8sClient, safetyAgent SafetyAgent, llmConfig *config.LL
 		k8sClient:   k8sClient,
 		safetyAgent: safetyAgent,
 		llm:         llm,
+	}
+
+	// 加载工具列表（严格启动检查）
+	ctx := context.Background()
+	if err := agent.LoadTools(ctx); err != nil {
+		logger.Fatal("Failed to load tools during agent initialization", logger.Err(err))
+		return nil, fmt.Errorf("failed to load tools: %w", err)
 	}
 
 	// 构建 Graph
@@ -57,6 +66,13 @@ func NewAgentWithLLM(k8sClient K8sClient, safetyAgent SafetyAgent, llm LLM) (*Ag
 		llm:         llm,
 	}
 
+	// 加载工具列表（严格启动检查）
+	ctx := context.Background()
+	if err := agent.LoadTools(ctx); err != nil {
+		logger.Fatal("Failed to load tools during agent initialization", logger.Err(err))
+		return nil, fmt.Errorf("failed to load tools: %w", err)
+	}
+
 	// 构建 Graph
 	if err := agent.buildGraph(); err != nil {
 		return nil, fmt.Errorf("failed to build graph: %w", err)
@@ -64,6 +80,50 @@ func NewAgentWithLLM(k8sClient K8sClient, safetyAgent SafetyAgent, llm LLM) (*Ag
 
 	logger.Info("Analysis Agent initialized successfully")
 	return agent, nil
+}
+
+// LoadTools 加载 K8s MCP Server 的工具列表
+// 该方法在 Agent 初始化时调用，确保工具列表在启动时加载成功
+func (a *Agent) LoadTools(ctx context.Context) error {
+	logger.Info("Loading tools from K8s MCP Server...")
+
+	// 调用 K8sClient.ListTools 获取工具列表
+	mcpTools, err := a.k8sClient.ListTools(ctx)
+	if err != nil {
+		// 严格启动检查：工具加载失败时Fatal
+		logger.Error("Failed to list tools from K8s MCP Server", logger.Err(err))
+		return fmt.Errorf("failed to list tools from K8s MCP Server: %w", err)
+	}
+
+	// 转换 MCP Tools 为 client.Tool 格式
+	tools := make([]client.Tool, 0, len(mcpTools))
+	for _, mcpTool := range mcpTools {
+		// 序列化 InputSchema
+		inputSchema, err := mcpTool.InputSchema.MarshalJSON()
+		if err != nil {
+			logger.Warn("Failed to marshal input schema for tool",
+				logger.String("tool", mcpTool.Name),
+				logger.Err(err))
+			continue
+		}
+
+		tools = append(tools, client.Tool{
+			Name:        mcpTool.Name,
+			Description: mcpTool.Description,
+			InputSchema: inputSchema,
+		})
+	}
+
+	// 存储工具列表
+	a.tools = tools
+
+	// 将工具列表注入到 LLM
+	a.llm.SetTools(tools)
+
+	logger.Info("Tools loaded successfully",
+		logger.Int("tool_count", len(tools)))
+
+	return nil
 }
 
 // buildGraph 构建 Eino Graph

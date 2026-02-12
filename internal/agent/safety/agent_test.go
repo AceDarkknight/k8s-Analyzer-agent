@@ -6,12 +6,14 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
 )
 
 // MockShellClient 模拟 Shell 客户端
 type MockShellClient struct {
-	executeFunc func(ctx context.Context, command string) (*shell.ExecuteResult, error)
+	executeFunc   func(ctx context.Context, command string) (*shell.ExecuteResult, error)
+	listToolsFunc func(ctx context.Context) ([]client.Tool, error)
 }
 
 func (m *MockShellClient) ExecuteCommand(ctx context.Context, command string) (*shell.ExecuteResult, error) {
@@ -27,6 +29,18 @@ func (m *MockShellClient) ExecuteCommand(ctx context.Context, command string) (*
 				Output: "mock output",
 				Nodes:  []string{"node1"},
 			},
+		},
+	}, nil
+}
+
+func (m *MockShellClient) ListTools(ctx context.Context) ([]client.Tool, error) {
+	if m.listToolsFunc != nil {
+		return m.listToolsFunc(ctx)
+	}
+	return []client.Tool{
+		{
+			Name:        "execute_command",
+			Description: "Execute a shell command",
 		},
 	}, nil
 }
@@ -276,7 +290,10 @@ func TestAgent_ExecuteSafeCommand(t *testing.T) {
 	}
 
 	mockClient := &MockShellClient{}
-	agent := NewAgentWithValidator(mockClient, validator)
+	agent, err := NewAgentWithValidator(mockClient, validator)
+	if err != nil {
+		t.Fatalf("Failed to create agent: %v", err)
+	}
 
 	tests := []struct {
 		name    string
@@ -340,7 +357,10 @@ func TestAgent_ExecuteSafeCommandWithClientError(t *testing.T) {
 		},
 	}
 
-	agent := NewAgentWithValidator(mockClient, validator)
+	agent, err := NewAgentWithValidator(mockClient, validator)
+	if err != nil {
+		t.Fatalf("Failed to create agent: %v", err)
+	}
 
 	ctx := context.Background()
 	_, err = agent.ExecuteSafeCommand(ctx, "ls -la")

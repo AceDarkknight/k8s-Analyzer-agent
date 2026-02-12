@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
@@ -13,12 +14,14 @@ import (
 // ShellClient Shell 客户端接口
 type ShellClient interface {
 	ExecuteCommand(ctx context.Context, command string) (*shell.ExecuteResult, error)
+	ListTools(ctx context.Context) ([]client.Tool, error)
 }
 
 // Agent Safety Agent，负责安全执行命令
 type Agent struct {
 	validator *Validator
 	client    ShellClient
+	tools     []client.Tool // 动态加载的工具列表
 }
 
 // NewAgent 创建新的 Safety Agent
@@ -29,18 +32,61 @@ func NewAgent(client ShellClient, configPath string, llmAuditor LLMAuditor) (*Ag
 		return nil, fmt.Errorf("failed to create validator: %w", err)
 	}
 
-	return &Agent{
-		validator: validator,
-		client:    client,
-	}, nil
-}
-
-// NewAgentWithValidator 使用自定义验证器创建 Safety Agent
-func NewAgentWithValidator(client ShellClient, validator *Validator) *Agent {
-	return &Agent{
+	agent := &Agent{
 		validator: validator,
 		client:    client,
 	}
+
+	// 加载工具列表（严格启动检查）
+	ctx := context.Background()
+	if err := agent.LoadTools(ctx); err != nil {
+		logger.Fatal("Failed to load tools during Safety Agent initialization", logger.Err(err))
+		return nil, fmt.Errorf("failed to load tools: %w", err)
+	}
+
+	return agent, nil
+}
+
+// NewAgentWithValidator 使用自定义验证器创建 Safety Agent
+func NewAgentWithValidator(client ShellClient, validator *Validator) (*Agent, error) {
+	agent := &Agent{
+		validator: validator,
+		client:    client,
+	}
+
+	// 加载工具列表（严格启动检查）
+	ctx := context.Background()
+	if err := agent.LoadTools(ctx); err != nil {
+		logger.Fatal("Failed to load tools during Safety Agent initialization", logger.Err(err))
+		return nil, fmt.Errorf("failed to load tools: %w", err)
+	}
+
+	return agent, nil
+}
+
+// LoadTools 加载 Shell MCP Server 的工具列表
+// 该方法在 Agent 初始化时调用，确保工具列表在启动时加载成功
+func (a *Agent) LoadTools(ctx context.Context) error {
+	logger.Info("Loading tools from Shell MCP Server...")
+
+	// 调用 ShellClient.ListTools 获取工具列表
+	tools, err := a.client.ListTools(ctx)
+	if err != nil {
+		// 严格启动检查：工具加载失败时Fatal
+		logger.Error("Failed to list tools from Shell MCP Server", logger.Err(err))
+		return fmt.Errorf("failed to list tools from Shell MCP Server: %w", err)
+	}
+
+	// 存储工具列表
+	a.tools = tools
+
+	// 将工具列表传递给 Validator
+	a.validator.SetTools(tools)
+
+	logger.Info("Tools loaded successfully",
+		logger.Int("tool_count", len(tools)))
+
+	return nil
 }
 
 // ExecuteSafeCommand 安全执行命令
@@ -258,4 +304,9 @@ func (a *Agent) GetClient() ShellClient {
 // GetConfig 获取安全配置
 func (a *Agent) GetConfig() *SecurityConfig {
 	return a.validator.GetConfig()
+}
+
+// GetTools 获取工具列表
+func (a *Agent) GetTools() []client.Tool {
+	return a.tools
 }

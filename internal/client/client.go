@@ -3,10 +3,26 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// Tool 定义 MCP 工具的统一描述信息
+// 用于在 LLM Prompt 中注入可用工具列表
+// 该结构体被所有 Client（K8s, Shell）和 Agent 共享使用
+type Tool struct {
+	// Name 工具名称
+	Name string `json:"name"`
+
+	// Description 工具描述
+	Description string `json:"description"`
+
+	// InputSchema 工具的输入参数 Schema (JSON Schema 格式)
+	// 使用 json.RawMessage 存储预序列化的 JSON，避免频繁的序列化开销
+	InputSchema json.RawMessage `json:"input_schema"`
+}
 
 // MCPClient 定义了与 MCP Server 交互的核心接口
 type MCPClient interface {

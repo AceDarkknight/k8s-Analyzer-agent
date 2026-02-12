@@ -403,6 +403,7 @@ func TestExecuteResult_FormatSummary(t *testing.T) {
 func TestClient_ExecuteCommand_EmptyCommand(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -421,6 +422,7 @@ func TestClient_ExecuteCommand_EmptyCommand(t *testing.T) {
 func TestClient_ExecuteCommand_NotConnected(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -439,6 +441,7 @@ func TestClient_ExecuteCommand_NotConnected(t *testing.T) {
 func TestClient_ExecuteCommandWithTimeout_EmptyCommand(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},

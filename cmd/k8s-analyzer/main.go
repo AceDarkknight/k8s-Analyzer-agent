@@ -89,26 +89,8 @@ func main() {
 		logger.Info("创建 Shell Client 成功")
 	}
 
-	// 4. 初始化 Safety Agent
-	logger.Info("步骤 4: 初始化 Safety Agent...")
-	// 创建 LLM 审计器（使用基于规则的审计器，传入 Safety 配置）
-	llmAuditor := safety.NewRuleBasedAuditor(&llmConfig.Safety)
-	safetyAgent, err := safety.NewAgent(shellClient, shellConfigPath, llmAuditor)
-	if err != nil {
-		logger.Fatal("Safety Agent 初始化失败", logger.Err(err))
-	}
-	logger.Info("Safety Agent 初始化成功")
-
-	// 5. 初始化 Analysis Agent
-	logger.Info("步骤 5: 初始化 Analysis Agent...")
-	analysisAgent, err := analysis.NewAgent(k8sClient, safetyAgent, &llmConfig.Analysis)
-	if err != nil {
-		logger.Fatal("Analysis Agent 初始化失败", logger.Err(err))
-	}
-	logger.Info("Analysis Agent 初始化成功")
-
-	// 6. 尝试连接 K8s Client（预期会失败，因为没有真实的 MCP Server）
-	logger.Info("步骤 6: 尝试连接 K8s Client...")
+	// 4. 连接 K8s Client（关键：必须在创建 Agent 之前连接）
+	logger.Info("步骤 4: 连接 K8s Client...")
 	if k8sClient != nil {
 		if err := k8sClient.Connect(ctx); err != nil {
 			logger.Fatal("K8s Client 连接失败", logger.Err(err))
@@ -122,10 +104,10 @@ func main() {
 		}()
 	}
 
-	// 7. 跳过 Shell Client 连接（预期会失败，因为没有真实的 MCP Server）
-	logger.Info("步骤 7: 尝试连接 Shell Client...")
+	// 5. 连接 Shell Client（关键：必须在创建 Agent 之前连接）
+	logger.Info("步骤 5: 连接 Shell Client...")
 
-	// 创建带超时的 context (10秒超时)
+	// 创建带超时的 context (20秒超时)
 	connectCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
@@ -140,6 +122,24 @@ func main() {
 			}
 		}()
 	}
+
+	// 6. 初始化 Safety Agent（在连接后创建，以便加载工具列表）
+	logger.Info("步骤 6: 初始化 Safety Agent...")
+	// 创建 LLM 审计器（使用基于规则的审计器，传入 Safety 配置）
+	llmAuditor := safety.NewRuleBasedAuditor(&llmConfig.Safety)
+	safetyAgent, err := safety.NewAgent(shellClient, shellConfigPath, llmAuditor)
+	if err != nil {
+		logger.Fatal("Safety Agent 初始化失败（工具加载失败）", logger.Err(err))
+	}
+	logger.Info("Safety Agent 初始化成功")
+
+	// 7. 初始化 Analysis Agent（在连接后创建，以便加载工具列表）
+	logger.Info("步骤 7: 初始化 Analysis Agent...")
+	analysisAgent, err := analysis.NewAgent(k8sClient, safetyAgent, &llmConfig.Analysis)
+	if err != nil {
+		logger.Fatal("Analysis Agent 初始化失败（工具加载失败）", logger.Err(err))
+	}
+	logger.Info("Analysis Agent 初始化成功")
 
 	// 8. 启动 Agent 并传入示例参数
 	logger.Info("步骤 8: 启动 Analysis Agent 进行分析...")

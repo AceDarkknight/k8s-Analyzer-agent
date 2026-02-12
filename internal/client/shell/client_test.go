@@ -23,6 +23,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "valid config with one server",
 			config: Config{
 				McpConfig: mcpConfig.ClientConfig{
+					Token: "test-token",
 					Servers: []mcpConfig.ServerConfig{
 						{Name: "server1", URL: "http://localhost:8080"},
 					},
@@ -34,6 +35,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "valid config with multiple servers",
 			config: Config{
 				McpConfig: mcpConfig.ClientConfig{
+					Token: "test-token",
 					Servers: []mcpConfig.ServerConfig{
 						{Name: "server1", URL: "http://localhost:8080"},
 						{Name: "server2", URL: "http://localhost:8081"},
@@ -43,8 +45,11 @@ func TestConfig_Validate(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:        "empty servers",
-			config:      Config{McpConfig: mcpConfig.ClientConfig{Servers: []mcpConfig.ServerConfig{}}},
+			name: "empty servers",
+			config: Config{McpConfig: mcpConfig.ClientConfig{
+				Token:   "test-token",
+				Servers: []mcpConfig.ServerConfig{},
+			}},
 			expectError: true,
 			errorMsg:    "at least one server is required",
 		},
@@ -52,6 +57,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "server without name",
 			config: Config{
 				McpConfig: mcpConfig.ClientConfig{
+					Token: "test-token",
 					Servers: []mcpConfig.ServerConfig{
 						{URL: "http://localhost:8080"},
 					},
@@ -64,6 +70,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "server without url",
 			config: Config{
 				McpConfig: mcpConfig.ClientConfig{
+					Token: "test-token",
 					Servers: []mcpConfig.ServerConfig{
 						{Name: "server1"},
 					},
@@ -76,6 +83,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "invalid url",
 			config: Config{
 				McpConfig: mcpConfig.ClientConfig{
+					Token: "test-token",
 					Servers: []mcpConfig.ServerConfig{
 						{Name: "server1", URL: "://invalid"},
 					},
@@ -88,6 +96,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "config with defaults",
 			config: Config{
 				McpConfig: mcpConfig.ClientConfig{
+					Token: "test-token",
 					Servers: []mcpConfig.ServerConfig{
 						{Name: "server1", URL: "http://localhost:8080"},
 					},
@@ -99,7 +108,8 @@ func TestConfig_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
+			config := tt.config
+			err := config.Validate()
 
 			if tt.expectError {
 				assert.Error(t, err, "应该返回错误")
@@ -109,9 +119,9 @@ func TestConfig_Validate(t *testing.T) {
 			} else {
 				assert.NoError(t, err, "不应该返回错误")
 				// 验证默认值
-				assert.Equal(t, 30, tt.config.Timeout, "应该设置默认超时")
-				assert.Equal(t, 3, tt.config.RetryConfig.MaxAttempts, "应该设置默认重试次数")
-				assert.Equal(t, "/sse", tt.config.SSEPath, "应该设置默认 SSE 路径")
+				assert.Equal(t, 30, config.Timeout, "应该设置默认超时")
+				assert.Equal(t, 3, config.RetryConfig.MaxAttempts, "应该设置默认重试次数")
+				assert.Equal(t, "/sse", config.SSEPath, "应该设置默认 SSE 路径")
 			}
 		})
 	}
@@ -127,6 +137,7 @@ func TestNewClient(t *testing.T) {
 			name: "valid config",
 			config: Config{
 				McpConfig: mcpConfig.ClientConfig{
+					Token: "test-token",
 					Servers: []mcpConfig.ServerConfig{
 						{Name: "server1", URL: "http://localhost:8080"},
 					},
@@ -138,6 +149,7 @@ func TestNewClient(t *testing.T) {
 			name: "invalid config",
 			config: Config{
 				McpConfig: mcpConfig.ClientConfig{
+					Token:   "test-token",
 					Servers: []mcpConfig.ServerConfig{},
 				},
 			},
@@ -184,6 +196,7 @@ func TestNewClientFromFile(t *testing.T) {
 func TestClient_IsConnected(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -227,6 +240,7 @@ func TestClient_GetConfig(t *testing.T) {
 func TestClient_GetCurrentServer(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -244,6 +258,7 @@ func TestClient_GetCurrentServer(t *testing.T) {
 func TestClient_Close(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -262,6 +277,7 @@ func TestClient_Close(t *testing.T) {
 func TestClient_UpdateConfig(t *testing.T) {
 	oldConfig := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -274,6 +290,7 @@ func TestClient_UpdateConfig(t *testing.T) {
 
 	newConfig := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server2", URL: "http://localhost:8081"},
 			},
@@ -304,6 +321,7 @@ func TestClient_UpdateConfig(t *testing.T) {
 func TestClient_UpdateConfig_Invalid(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -315,6 +333,7 @@ func TestClient_UpdateConfig_Invalid(t *testing.T) {
 
 	invalidConfig := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token:   "test-token",
 			Servers: []mcpConfig.ServerConfig{},
 		},
 	}
@@ -326,6 +345,7 @@ func TestClient_UpdateConfig_Invalid(t *testing.T) {
 func TestClient_Connect_NotConnected(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -344,6 +364,7 @@ func TestClient_Connect_NotConnected(t *testing.T) {
 func TestClient_Connect_AlreadyConnected(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -364,6 +385,7 @@ func TestClient_Connect_AlreadyConnected(t *testing.T) {
 func TestClient_CallTool_NotConnected(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -382,6 +404,7 @@ func TestClient_CallTool_NotConnected(t *testing.T) {
 func TestClient_ListTools_NotConnected(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -400,6 +423,7 @@ func TestClient_ListTools_NotConnected(t *testing.T) {
 func TestClient_HealthCheck_NotConnected(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -418,6 +442,7 @@ func TestClient_HealthCheck_NotConnected(t *testing.T) {
 func TestClient_isConnectionError(t *testing.T) {
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},
@@ -475,6 +500,7 @@ func TestClient_Integration(t *testing.T) {
 
 	config := Config{
 		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
 			Servers: []mcpConfig.ServerConfig{
 				{Name: "server1", URL: "http://localhost:8080"},
 			},

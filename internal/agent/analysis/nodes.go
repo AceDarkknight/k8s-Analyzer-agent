@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
@@ -15,7 +16,7 @@ import (
 // K8sClient K8s 客户端接口
 type K8sClient interface {
 	CallTool(ctx context.Context, name string, args map[string]interface{}) (*k8s.CallToolResult, error)
-	ListTools(ctx context.Context) ([]k8s.Tool, error)
+	ListTools(ctx context.Context) ([]client.Tool, error)
 }
 
 // SafetyAgent 安全 Agent 接口

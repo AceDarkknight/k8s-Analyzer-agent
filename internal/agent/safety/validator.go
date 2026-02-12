@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
@@ -46,6 +47,9 @@ type AuditResult struct {
 type LLMAuditor interface {
 	// AuditCommand 审计命令的安全性
 	AuditCommand(ctx context.Context, command string, contextInfo map[string]interface{}) (*AuditResult, error)
+
+	// SetTools 设置可用的工具列表
+	SetTools(tools []client.Tool)
 }
 
 // SecurityConfig 安全配置
@@ -67,7 +71,8 @@ type SecurityConfig struct {
 type Validator struct {
 	config          *SecurityConfig
 	compiledRegexes []*regexp.Regexp
-	llmAuditor      LLMAuditor // LLM 审计器
+	llmAuditor      LLMAuditor    // LLM 审计器
+	tools           []client.Tool // 可用的工具列表
 }
 
 // NewValidator 创建新的安全验证器
@@ -264,6 +269,21 @@ func (v *Validator) hasDangerousPattern(command string) bool {
 	return false
 }
 
+// SetTools 设置可用的工具列表
+func (v *Validator) SetTools(tools []client.Tool) {
+	v.tools = tools
+	// 如果有 LLM 审计器，也将工具传递给它
+	if v.llmAuditor != nil {
+		v.llmAuditor.SetTools(tools)
+	}
+	logger.Info("[Validator] Tools updated", logger.Int("tool_count", len(tools)))
+}
+
+// GetTools 获取工具列表
+func (v *Validator) GetTools() []client.Tool {
+	return v.tools
+}
+
 // GetConfig 获取当前配置
 func (v *Validator) GetConfig() *SecurityConfig {
 	return v.config
@@ -289,7 +309,8 @@ func IsUnsafeCommand(err error) bool {
 // RuleBasedAuditor 基于规则的审计器
 // 使用预定义规则进行命令审计
 type RuleBasedAuditor struct {
-	modelName string // 模型名称（从配置中传入）
+	modelName string        // 模型名称（从配置中传入）
+	tools     []client.Tool // 可用的工具列表
 }
 
 // NewRuleBasedAuditor 创建基于规则的审计器
@@ -304,6 +325,51 @@ func NewRuleBasedAuditor(llmConfig *config.LLMConfig) *RuleBasedAuditor {
 		logger.String("provider", llmConfig.Provider))
 
 	return auditor
+}
+
+// SetTools 设置可用的工具列表
+func (a *RuleBasedAuditor) SetTools(tools []client.Tool) {
+	a.tools = tools
+	logger.Info("[RuleBasedAuditor] Tools updated", logger.Int("tool_count", len(tools)))
+
+	// 记录格式化后的工具提示（用于验证）
+	if len(tools) > 0 {
+		toolsPrompt := a.FormatToolsPrompt()
+		logger.Debug("[RuleBasedAuditor] Tools formatted for system prompt",
+			logger.String("prompt_preview", toolsPrompt[:min(200, len(toolsPrompt))]))
+	}
+}
+
+// FormatToolsPrompt 格式化工具列表为 System Prompt
+// 返回包含所有允许的 Shell 命令的字符串，帮助审计器判断命令是否安全
+func (a *RuleBasedAuditor) FormatToolsPrompt() string {
+	if len(a.tools) == 0 {
+		return "当前没有可用的 Shell 工具，所有命令均被禁止。"
+	}
+
+	var prompt strings.Builder
+	prompt.WriteString("## 允许的 Shell 命令列表\n\n")
+	prompt.WriteString("以下是系统允许执行的 Shell 命令工具列表。只有这些命令（及其合理参数）被认为是安全的：\n\n")
+
+	for i, tool := range a.tools {
+		prompt.WriteString(fmt.Sprintf("%d. **%s**: %s\n", i+1, tool.Name, tool.Description))
+	}
+
+	prompt.WriteString("\n**审计指南**:\n")
+	prompt.WriteString("- 只允许执行上述列表中的命令\n")
+	prompt.WriteString("- 检查命令参数是否合理，避免危险操作（如删除系统文件、无限循环等）\n")
+	prompt.WriteString("- 对于可能修改系统状态的命令，给出警告级别\n")
+	prompt.WriteString("- 对于明显危险的命令（如 rm -rf /、fork bomb 等），直接拒绝\n\n")
+
+	return prompt.String()
+}
+
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // AuditCommand 审计命令的安全性
@@ -421,11 +487,19 @@ func (a *RuleBasedAuditor) AuditCommand(ctx context.Context, command string, con
 
 // MockAuditor 模拟审计器
 // 用于测试和演示，返回预设的审计结果
-type MockAuditor struct{}
+type MockAuditor struct {
+	tools []client.Tool // 可用的工具列表
+}
 
 // NewMockAuditor 创建模拟审计器
 func NewMockAuditor() *MockAuditor {
 	return &MockAuditor{}
+}
+
+// SetTools 设置可用的工具列表
+func (a *MockAuditor) SetTools(tools []client.Tool) {
+	a.tools = tools
+	logger.Info("[MockAuditor] Tools updated", logger.Int("tool_count", len(tools)))
 }
 
 // AuditCommand 模拟命令审计

@@ -90,31 +90,36 @@ func (c *MockClient) CallTool(ctx context.Context, name string, args map[string]
 }
 
 // ListTools 获取 K8s MCP Server 上可用的工具列表（模拟）
-func (c *MockClient) ListTools(ctx context.Context) ([]Tool, error) {
+func (c *MockClient) ListTools(ctx context.Context) ([]clientpkg.Tool, error) {
 	if !c.connected {
 		return nil, &ConnectionError{Reason: "client is not connected"}
 	}
 
-	return []Tool{
+	return []clientpkg.Tool{
 		{
 			Name:        "list_pods",
 			Description: "List pods in a namespace",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"namespace":{"type":"string","description":"Namespace name"}}}`),
 		},
 		{
 			Name:        "list_services",
 			Description: "List services in a namespace",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"namespace":{"type":"string","description":"Namespace name"}}}`),
 		},
 		{
 			Name:        "list_deployments",
 			Description: "List deployments in a namespace",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"namespace":{"type":"string","description":"Namespace name"}}}`),
 		},
 		{
 			Name:        "list_events",
 			Description: "List events in a namespace",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"namespace":{"type":"string","description":"Namespace name"}}}`),
 		},
 		{
 			Name:        "get_pod_logs",
 			Description: "Get logs for a pod",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"pod_name":{"type":"string","description":"Pod name"},"namespace":{"type":"string","description":"Namespace name"}},"required":["pod_name"]}`),
 		},
 	}, nil
 }

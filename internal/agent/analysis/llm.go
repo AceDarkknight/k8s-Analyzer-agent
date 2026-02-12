@@ -3,10 +3,12 @@ package analysis
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
@@ -22,13 +24,18 @@ type LLM interface {
 
 	// GenerateReport 生成报告摘要
 	GenerateReport(ctx context.Context, state *State) (string, error)
+
+	// SetTools 设置可用的工具列表
+	// 用于动态注入工具信息到 LLM Prompt 中
+	SetTools(tools []client.Tool)
 }
 
 // RuleBasedLLM 基于规则的 LLM 实现
 // 使用预定义规则进行决策，不需要真实的 LLM API
 type RuleBasedLLM struct {
 	rules     []DecisionRule
-	modelName string // 模型名称（从配置中传入）
+	modelName string        // 模型名称（从配置中传入）
+	tools     []client.Tool // 可用的工具列表
 }
 
 // DecisionRule 决策规则
@@ -146,6 +153,78 @@ func (llm *RuleBasedLLM) initDefaultRules() {
 // AddRule 添加自定义规则
 func (llm *RuleBasedLLM) AddRule(rule DecisionRule) {
 	llm.rules = append(llm.rules, rule)
+}
+
+// SetTools 设置可用的工具列表
+func (llm *RuleBasedLLM) SetTools(tools []client.Tool) {
+	llm.tools = tools
+	logger.Info("[RuleBasedLLM] Tools set",
+		logger.Int("count", len(tools)),
+		logger.String("model", llm.modelName))
+
+	// 记录格式化后的工具提示（用于验证）
+	if len(tools) > 0 {
+		toolsPrompt := llm.FormatToolsPrompt()
+		logger.Debug("[RuleBasedLLM] Tools formatted for prompt",
+			logger.String("prompt_preview", toolsPrompt[:min(200, len(toolsPrompt))]))
+	}
+}
+
+// FormatToolsPrompt 格式化工具列表为 LLM Prompt
+// 返回包含所有工具描述的字符串，可注入到 System Prompt 中
+func (llm *RuleBasedLLM) FormatToolsPrompt() string {
+	if len(llm.tools) == 0 {
+		return "当前没有可用的工具。"
+	}
+
+	var prompt strings.Builder
+	prompt.WriteString("## 可用工具列表\n\n")
+	prompt.WriteString("以下是您可以使用的工具，每个工具都有特定的功能和参数要求：\n\n")
+
+	for i, tool := range llm.tools {
+		prompt.WriteString(fmt.Sprintf("### %d. %s\n\n", i+1, tool.Name))
+		prompt.WriteString(fmt.Sprintf("**描述**: %s\n\n", tool.Description))
+
+		// 格式化 InputSchema
+		if len(tool.InputSchema) > 0 {
+			prompt.WriteString("**参数要求**:\n")
+
+			// 反序列化 json.RawMessage 为 map
+			var schemaMap map[string]interface{}
+			if err := json.Unmarshal(tool.InputSchema, &schemaMap); err == nil {
+				// 提取 properties
+				if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
+					for paramName, paramDetails := range props {
+						if detailMap, ok := paramDetails.(map[string]interface{}); ok {
+							paramType := detailMap["type"]
+							paramDesc := detailMap["description"]
+							prompt.WriteString(fmt.Sprintf("  - `%s` (%v): %v\n", paramName, paramType, paramDesc))
+						}
+					}
+				}
+				// 提取 required 字段
+				if required, ok := schemaMap["required"].([]interface{}); ok && len(required) > 0 {
+					prompt.WriteString(fmt.Sprintf("  - **必需参数**: %v\n", required))
+				}
+			} else {
+				// 如果解析失败，记录原始 Schema
+				logger.Debug("[RuleBasedLLM] Failed to parse InputSchema",
+					logger.String("tool", tool.Name),
+					logger.Err(err))
+			}
+			prompt.WriteString("\n")
+		}
+	}
+
+	return prompt.String()
+}
+
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // MakeDecision 根据当前状态做出决策
@@ -292,6 +371,7 @@ func (llm *RuleBasedLLM) GenerateReport(ctx context.Context, state *State) (stri
 // MockLLM 模拟 LLM 实现
 // 用于测试和演示，返回预设的响应
 type MockLLM struct {
+	tools []client.Tool // 可用的工具列表
 }
 
 // NewMockLLM 创建 Mock LLM
@@ -331,6 +411,12 @@ func (m *MockLLM) Analyze(ctx context.Context, state *State) (string, error) {
 func (m *MockLLM) GenerateReport(ctx context.Context, state *State) (string, error) {
 	return fmt.Sprintf("模拟报告：分析了 %d 个 Pod，执行了 %d 条命令",
 		len(state.K8sInfo.Pods), len(state.AnalysisResult.ExecutedCommands)), nil
+}
+
+// SetTools 设置可用的工具列表
+func (m *MockLLM) SetTools(tools []client.Tool) {
+	m.tools = tools
+	logger.Debug("[MockLLM] Tools set", logger.Int("count", len(tools)))
 }
 
 // CommandGenerator 命令生成器

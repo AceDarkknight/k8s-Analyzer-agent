@@ -3,6 +3,7 @@ package shell
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -170,17 +171,37 @@ func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]
 }
 
 // ListTools 获取工具列表
-func (c *RealClient) ListTools(ctx context.Context) ([]*mcp.Tool, error) {
+func (c *RealClient) ListTools(ctx context.Context) ([]client.Tool, error) {
 	if !c.connected {
 		return nil, fmt.Errorf("client not connected")
 	}
 
-	tools, err := c.mcpClient.GetSession().ListTools(ctx, &mcp.ListToolsParams{})
+	result, err := c.mcpClient.GetSession().ListTools(ctx, &mcp.ListToolsParams{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
 
-	return tools.Tools, nil
+	// 转换 mcp.Tool 为 client.Tool
+	tools := make([]client.Tool, 0, len(result.Tools))
+	for _, mcpTool := range result.Tools {
+		// 序列化 InputSchema 为 json.RawMessage
+		var inputSchema json.RawMessage
+		if mcpTool.InputSchema != nil {
+			schemaBytes, err := json.Marshal(mcpTool.InputSchema)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal input schema for tool %s: %w", mcpTool.Name, err)
+			}
+			inputSchema = schemaBytes
+		}
+
+		tools = append(tools, client.Tool{
+			Name:        mcpTool.Name,
+			Description: mcpTool.Description,
+			InputSchema: inputSchema,
+		})
+	}
+
+	return tools, nil
 }
 
 // IsConnected 检查是否已连接
@@ -375,7 +396,7 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 }
 
 // ListTools 获取 Shell Executor MCP Server 上可用的工具列表
-func (c *Client) ListTools(ctx context.Context) ([]*mcp.Tool, error) {
+func (c *Client) ListTools(ctx context.Context) ([]client.Tool, error) {
 	if !c.connected {
 		logger.Error("Cannot list tools: client is not connected")
 		return nil, &client.ConnectionError{Reason: "client is not connected"}
@@ -391,8 +412,29 @@ func (c *Client) ListTools(ctx context.Context) ([]*mcp.Tool, error) {
 		}
 	}
 
-	logger.Debug("Successfully listed tools", logger.Int("count", len(result.Tools)))
-	return result.Tools, nil
+	// 转换 mcp.Tool 为 client.Tool
+	tools := make([]client.Tool, 0, len(result.Tools))
+	for _, mcpTool := range result.Tools {
+		// 序列化 InputSchema 为 json.RawMessage
+		var inputSchema json.RawMessage
+		if mcpTool.InputSchema != nil {
+			schemaBytes, err := json.Marshal(mcpTool.InputSchema)
+			if err != nil {
+				logger.Error("Failed to marshal input schema", logger.String("tool", mcpTool.Name), logger.Err(err))
+				return nil, fmt.Errorf("failed to marshal input schema for tool %s: %w", mcpTool.Name, err)
+			}
+			inputSchema = schemaBytes
+		}
+
+		tools = append(tools, client.Tool{
+			Name:        mcpTool.Name,
+			Description: mcpTool.Description,
+			InputSchema: inputSchema,
+		})
+	}
+
+	logger.Debug("Successfully listed tools", logger.Int("count", len(tools)))
+	return tools, nil
 }
 
 // IsConnected 检查客户端是否已连接
