@@ -27,7 +27,7 @@ func TestRuleBasedLLM_FormatToolsPrompt(t *testing.T) {
 				"当前没有可用的工具",
 			},
 			notExpected: []string{
-				"可用工具列表",
+				"### 1.",
 			},
 		},
 		{
@@ -50,7 +50,7 @@ func TestRuleBasedLLM_FormatToolsPrompt(t *testing.T) {
 			},
 			expectedInText: []string{
 				"## 可用工具列表",
-				"1. get_pods",
+				"### 1. get_pods",
 				"获取 Pod 列表",
 				"**参数要求**:",
 				"namespace",
@@ -58,7 +58,7 @@ func TestRuleBasedLLM_FormatToolsPrompt(t *testing.T) {
 				"**必需参数**:",
 			},
 			notExpected: []string{
-				"2. ", // 不应该有第二个工具
+				"### 2.", // 不应该有第二个工具
 			},
 		},
 		{
@@ -89,8 +89,8 @@ func TestRuleBasedLLM_FormatToolsPrompt(t *testing.T) {
 			},
 			expectedInText: []string{
 				"## 可用工具列表",
-				"1. get_pods",
-				"2. get_logs",
+				"### 1. get_pods",
+				"### 2. get_logs",
 				"获取 Pod 列表",
 				"获取 Pod 日志",
 				"namespace",
@@ -98,7 +98,7 @@ func TestRuleBasedLLM_FormatToolsPrompt(t *testing.T) {
 				"container",
 			},
 			notExpected: []string{
-				"3. ", // 不应该有第三个工具
+				"### 3.", // 不应该有第三个工具
 			},
 		},
 		{
@@ -112,7 +112,7 @@ func TestRuleBasedLLM_FormatToolsPrompt(t *testing.T) {
 			},
 			expectedInText: []string{
 				"## 可用工具列表",
-				"1. simple_tool",
+				"### 1. simple_tool",
 				"简单工具",
 			},
 			notExpected: []string{
@@ -322,6 +322,8 @@ func TestRuleBasedLLM_FormatToolsPrompt_RealWorldExample(t *testing.T) {
 
 	// 验证格式化的提示包含所有关键信息
 	expectedElements := []string{
+		"## 系统角色", // 系统提示词开头
+		"全命名空间诊断", // 核心职责
 		"## 可用工具列表",
 		"1. k8s_get_pods",
 		"2. k8s_get_logs",
@@ -339,9 +341,9 @@ func TestRuleBasedLLM_FormatToolsPrompt_RealWorldExample(t *testing.T) {
 			"提示应该包含: %s", element)
 	}
 
-	// 验证提示结构合理
-	assert.True(t, strings.HasPrefix(prompt, "## 可用工具列表"),
-		"提示应该以标题开头")
+	// 验证提示结构合理（现在以系统角色开头）
+	assert.True(t, strings.HasPrefix(prompt, "## 系统角色"),
+		"提示应该以系统角色标题开头")
 	assert.Contains(t, prompt, "**参数要求**",
 		"提示应该包含参数要求说明")
 }

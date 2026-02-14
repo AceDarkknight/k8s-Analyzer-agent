@@ -174,12 +174,22 @@ func (a *Agent) buildGraph() error {
 		func(ctx context.Context, state *State) (*State, error) {
 			logger.Debug("Executing ActionNode", logger.Int("iteration", state.IterationCount))
 
+			// 增加迭代计数
+			state.IterationCount++
+
 			// 生成要执行的命令
 			command, err := commandGenerator.GenerateCommand(state)
 			if err != nil {
 				logger.Error("Failed to generate command", logger.Err(err))
 				// 设置错误状态，让决策节点处理
 				state.LastError = err
+				return state, nil
+			}
+
+			// 如果没有命令可执行，设置标志让决策节点知道
+			if command == "" {
+				logger.Debug("No new command to execute, proceeding to decision")
+				state.LastAction = "no_command"
 				return state, nil
 			}
 

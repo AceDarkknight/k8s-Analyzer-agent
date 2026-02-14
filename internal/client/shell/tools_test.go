@@ -529,3 +529,146 @@ func TestClient_ExecuteCommand_Integration(t *testing.T) {
 	assert.NotNil(t, result, "结果不应为 nil")
 	assert.NotEmpty(t, result.Summary, "摘要不应为空")
 }
+
+// TestIsKubectlCommand 测试 kubectl 命令检测
+func TestIsKubectlCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		command  string
+		expected bool
+	}{
+		{
+			name:     "kubectl get pods",
+			command:  "kubectl get pods",
+			expected: true,
+		},
+		{
+			name:     "kubectl get pods -A",
+			command:  "kubectl get pods -A",
+			expected: true,
+		},
+		{
+			name:     "kubectl describe pod my-pod",
+			command:  "kubectl describe pod my-pod",
+			expected: true,
+		},
+		{
+			name:     "kubectl logs my-pod -n default",
+			command:  "kubectl logs my-pod -n default",
+			expected: true,
+		},
+		{
+			name:     "KUBECTL get pods (uppercase)",
+			command:  "KUBECTL get pods",
+			expected: true,
+		},
+		{
+			name:     "Kubectl get pods (mixed case)",
+			command:  "Kubectl get pods",
+			expected: true,
+		},
+		{
+			name:     "sudo kubectl get pods",
+			command:  "sudo kubectl get pods",
+			expected: true,
+		},
+		{
+			name:     "ls -la",
+			command:  "ls -la",
+			expected: false,
+		},
+		{
+			name:     "curl http://localhost",
+			command:  "curl http://localhost",
+			expected: false,
+		},
+		{
+			name:     "ping 8.8.8.8",
+			command:  "ping 8.8.8.8",
+			expected: false,
+		},
+		{
+			name:     "docker ps",
+			command:  "docker ps",
+			expected: false,
+		},
+		{
+			name:     "echo kubectl",
+			command:  "echo kubectl",
+			expected: false,
+		},
+		{
+			name:     "empty command",
+			command:  "",
+			expected: false,
+		},
+		{
+			name:     "kubectl.exe get pods (Windows)",
+			command:  "kubectl.exe get pods",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isKubectlCommand(tt.command)
+			assert.Equal(t, tt.expected, result, "isKubectlCommand(%q) = %v, want %v", tt.command, result, tt.expected)
+		})
+	}
+}
+
+// TestClient_ExecuteCommand_KubectlBlocked 测试 kubectl 命令被阻止
+func TestClient_ExecuteCommand_KubectlBlocked(t *testing.T) {
+	config := Config{
+		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{"kubectl get pods", "kubectl get pods"},
+		{"kubectl get pods -A", "kubectl get pods -A"},
+		{"kubectl describe pod", "kubectl describe pod my-pod"},
+		{"kubectl logs", "kubectl logs my-pod"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.ExecuteCommand(ctx, tt.command)
+			assert.Error(t, err, "kubectl 命令应该被阻止")
+			assert.Equal(t, ErrKubectlBlocked, err, "应该返回 ErrKubectlBlocked 错误")
+		})
+	}
+}
+
+// TestClient_ExecuteCommandWithTimeout_KubectlBlocked 测试带超时的 kubectl 命令被阻止
+func TestClient_ExecuteCommandWithTimeout_KubectlBlocked(t *testing.T) {
+	config := Config{
+		McpConfig: mcpConfig.ClientConfig{
+			Token: "test-token",
+			Servers: []mcpConfig.ServerConfig{
+				{Name: "server1", URL: "http://localhost:8080"},
+			},
+		},
+	}
+
+	client, err := NewClient(config)
+	require.NoError(t, err, "创建 client 不应失败")
+
+	ctx := context.Background()
+
+	_, err = client.ExecuteCommandWithTimeout(ctx, "kubectl get pods", 10)
+	assert.Error(t, err, "kubectl 命令应该被阻止")
+	assert.Equal(t, ErrKubectlBlocked, err, "应该返回 ErrKubectlBlocked 错误")
+}

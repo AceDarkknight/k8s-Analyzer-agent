@@ -364,6 +364,8 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 		return nil, &client.ConnectionError{Reason: "client is not connected"}
 	}
 
+	argsJSON, _ := json.Marshal(args)
+	fmt.Printf("[Shell MCP] 调用工具: %s, 参数: %s\n", name, string(argsJSON))
 	logger.Debug("Calling tool", logger.String("tool", name), logger.Any("args", args))
 
 	// 使用重试机制执行工具调用
@@ -383,12 +385,28 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 	)
 
 	if err != nil {
+		fmt.Printf("[Shell MCP] 工具调用失败: %s, 错误: %v\n", name, err)
 		logger.Error("Tool execution failed", logger.String("tool", name), logger.Err(err))
 		return nil, &client.ToolExecutionError{
 			ToolName: name,
 			Reason:   "tool execution failed",
 			Err:      err,
 		}
+	}
+
+	if len(result.Content) > 0 {
+		if textContent, ok := result.Content[0].(*mcp.TextContent); ok {
+			// 截取前200个字符避免日志过长
+			resultPreview := textContent.Text
+			if len(resultPreview) > 200 {
+				resultPreview = resultPreview[:200] + "..."
+			}
+			fmt.Printf("[Shell MCP] 工具调用成功: %s, 结果: %s\n", name, resultPreview)
+		} else {
+			fmt.Printf("[Shell MCP] 工具调用成功: %s, 内容数量: %d\n", name, len(result.Content))
+		}
+	} else {
+		fmt.Printf("[Shell MCP] 工具调用成功: %s, 无内容返回\n", name)
 	}
 
 	logger.Debug("Tool call succeeded", logger.String("tool", name))

@@ -392,18 +392,21 @@ func TestCommandGenerator(t *testing.T) {
 		t.Errorf("Expected error when generating command for normal pod")
 	}
 
-	// 测试已经执行了命令的情况
+	// 测试已经执行了命令的情况 - 应该返回空字符串而不是错误
 	state = NewState("test")
 	state.AnalysisResult.ExecutedCommands = []CommandExecution{
 		{
-			Command: "kubectl get pods",
+			Command: "kubectl get pods -A",
 			Success: true,
 		},
 	}
 
 	command, err = generator.GenerateCommand(state)
-	if err == nil {
-		t.Errorf("Expected error when command already executed")
+	if err != nil {
+		t.Errorf("Unexpected error when command already executed: %v", err)
+	}
+	if command != "" {
+		t.Errorf("Expected empty command when all commands already executed, got: %s", command)
 	}
 }
 
@@ -498,9 +501,14 @@ func TestGraphFlow(t *testing.T) {
 	t.Logf("Graph flow completed with status: %s", result.Status)
 	t.Logf("Total iterations: %d", len(result.ExecutedCommands))
 
-	// 验证至少执行了一次 Info 节点
-	if len(result.ExecutedCommands) == 0 {
-		t.Error("Expected at least one command execution")
+	// 验证分析完成（状态为 completed 或 partial）
+	if result.Status != StatusCompleted && result.Status != StatusPartial {
+		t.Errorf("Expected status '%s' or '%s', got '%s'", StatusCompleted, StatusPartial, result.Status)
+	}
+
+	// 验证有分析摘要（ReportNode 应该已生成）
+	if result.Summary == "" {
+		t.Error("Expected summary to be generated")
 	}
 }
 

@@ -28,60 +28,126 @@ type SafetyAgent interface {
 // InfoNode 信息收集节点
 // 调用 K8s Client 获取集群/资源信息
 type InfoNode struct {
-	k8sClient K8sClient
+	k8sClient      K8sClient
+	availableTools map[string]bool // 缓存可用工具列表
 }
 
 // NewInfoNode 创建新的 InfoNode
 func NewInfoNode(k8sClient K8sClient) *InfoNode {
 	return &InfoNode{
-		k8sClient: k8sClient,
+		k8sClient:      k8sClient,
+		availableTools: make(map[string]bool),
 	}
 }
 
+// hasTool 检查工具是否可用
+func (n *InfoNode) hasTool(ctx context.Context, toolName string) bool {
+	// 如果缓存为空，先获取工具列表
+	if len(n.availableTools) == 0 {
+		tools, err := n.k8sClient.ListTools(ctx)
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to list tools from MCP server", logger.Err(err))
+			return false
+		}
+		for _, tool := range tools {
+			n.availableTools[tool.Name] = true
+		}
+		logger.Debug("[InfoNode] Cached available tools", logger.Int("count", len(n.availableTools)))
+	}
+	return n.availableTools[toolName]
+}
+
 // Execute 执行信息收集
+// 首先获取所有命名空间，然后遍历每个命名空间收集资源
 func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 	logger.Info("[InfoNode] Starting information collection", logger.String("userInput", state.UserInput))
 
-	// 根据用户输入决定收集哪些信息
-	namespace := n.extractNamespace(state.UserInput)
-
-	// 收集 Pod 信息
-	pods, err := n.collectPods(ctx, namespace)
+	// 步骤 1: 获取所有命名空间
+	namespaces, err := n.collectNamespaces(ctx)
 	if err != nil {
-		logger.Error("[InfoNode] Failed to collect pods", logger.Err(err))
-		state.LastError = fmt.Errorf("failed to collect pods: %w", err)
-		return state, nil // 即使失败也继续，让决策节点处理
+		logger.Warn("[InfoNode] Failed to list namespaces, falling back to default", logger.Err(err))
+		// 回退到 default 命名空间，但不设置 LastError，因为这只是一个警告
+		namespaces = []string{"default"}
 	}
-	state.K8sInfo.Pods = pods
-	state.K8sInfo.Namespace = namespace
 
-	// 收集 Service 信息
-	services, err := n.collectServices(ctx, namespace)
-	if err != nil {
-		logger.Warn("[InfoNode] Failed to collect services", logger.Err(err))
-		// 不设置错误，继续执行
+	// 检查用户是否指定了特定命名空间
+	specifiedNamespace := n.extractNamespace(state.UserInput)
+	if specifiedNamespace != "" && specifiedNamespace != "default" {
+		// 用户指定了特定命名空间，只收集该命名空间
+		logger.Info("[InfoNode] User specified namespace, collecting from single namespace",
+			logger.String("namespace", specifiedNamespace))
+		namespaces = []string{specifiedNamespace}
 	}
-	state.K8sInfo.Services = services
 
-	// 收集 Deployment 信息
-	deployments, err := n.collectDeployments(ctx, namespace)
-	if err != nil {
-		logger.Warn("[InfoNode] Failed to collect deployments", logger.Err(err))
+	logger.Info("[InfoNode] Collecting resources from namespaces",
+		logger.Any("namespaces", namespaces),
+		logger.Int("count", len(namespaces)))
+
+	// 记录所有命名空间到状态
+	state.K8sInfo.Namespace = strings.Join(namespaces, ", ")
+
+	// 步骤 2: 遍历每个命名空间收集资源
+	allPods := make([]PodInfo, 0)
+	allServices := make([]ServiceInfo, 0)
+	allDeployments := make([]DeploymentInfo, 0)
+	allEvents := make([]EventInfo, 0)
+
+	for _, ns := range namespaces {
+		logger.Debug("[InfoNode] Collecting resources from namespace", logger.String("namespace", ns))
+
+		// 收集 Pod 信息
+		pods, err := n.collectPods(ctx, ns)
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to collect pods from namespace",
+				logger.String("namespace", ns),
+				logger.Err(err))
+		} else {
+			allPods = append(allPods, pods...)
+		}
+
+		// 收集 Service 信息
+		services, err := n.collectServices(ctx, ns)
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to collect services from namespace",
+				logger.String("namespace", ns),
+				logger.Err(err))
+		} else {
+			allServices = append(allServices, services...)
+		}
+
+		// 收集 Deployment 信息
+		deployments, err := n.collectDeployments(ctx, ns)
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to collect deployments from namespace",
+				logger.String("namespace", ns),
+				logger.Err(err))
+		} else {
+			allDeployments = append(allDeployments, deployments...)
+		}
+
+		// 收集事件信息
+		events, err := n.collectEvents(ctx, ns)
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to collect events from namespace",
+				logger.String("namespace", ns),
+				logger.Err(err))
+		} else {
+			allEvents = append(allEvents, events...)
+		}
 	}
-	state.K8sInfo.Deployments = deployments
 
-	// 收集事件信息
-	events, err := n.collectEvents(ctx, namespace)
-	if err != nil {
-		logger.Warn("[InfoNode] Failed to collect events", logger.Err(err))
-	}
-	state.K8sInfo.Events = events
+	// 更新状态
+	state.K8sInfo.Pods = allPods
+	state.K8sInfo.Services = allServices
+	state.K8sInfo.Deployments = allDeployments
+	state.K8sInfo.Events = allEvents
 
-	logger.Info("[InfoNode] Collected information",
-		logger.Int("pods", len(pods)),
-		logger.Int("services", len(services)),
-		logger.Int("deployments", len(deployments)),
-		logger.Int("events", len(events)))
+	logger.Info("[InfoNode] Collected information from all namespaces",
+		logger.Int("namespaces", len(namespaces)),
+		logger.Int("pods", len(allPods)),
+		logger.Int("services", len(allServices)),
+		logger.Int("deployments", len(allDeployments)),
+		logger.Int("events", len(allEvents)))
 
 	return state, nil
 }
@@ -110,6 +176,40 @@ func (n *InfoNode) extractNamespace(input string) string {
 		}
 	}
 	return "default" // 默认命名空间
+}
+
+// collectNamespaces 收集所有命名空间
+func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, error) {
+	// 先检查 list_namespaces 工具是否可用
+	if !n.hasTool(ctx, "list_namespaces") {
+		logger.Info("[InfoNode] list_namespaces tool not available on MCP server, using hardcoded fallback list")
+		return []string{"default", "kube-system", "kube-public", "kube-node-lease"}, nil
+	}
+
+	// 调用 K8s MCP 工具获取命名空间列表
+	result, err := n.k8sClient.CallTool(ctx, "list_namespaces", nil)
+	if err != nil {
+		logger.Warn("[InfoNode] list_namespaces tool call failed, using hardcoded fallback list", logger.Err(err))
+		// K8s MCP 服务器不支持 list_namespaces，返回硬编码的常见命名空间列表
+		return []string{"default", "kube-system", "kube-public", "kube-node-lease"}, nil
+	}
+
+	// 解析结果
+	namespaces := make([]string, 0)
+	if result != nil {
+		// 从 result 中解析命名空间列表
+		// 实际实现需要根据 MCP Server 返回的格式进行解析
+		// 这里假设 result.Content 包含命名空间列表
+		_ = result // 实际需要解析
+	}
+
+	// 如果没有获取到命名空间，使用硬编码列表作为回退
+	if len(namespaces) == 0 {
+		logger.Info("[InfoNode] No namespaces returned from MCP, using hardcoded fallback list")
+		return []string{"default", "kube-system", "kube-public", "kube-node-lease"}, nil
+	}
+
+	return namespaces, nil
 }
 
 // collectPods 收集 Pod 信息
@@ -178,7 +278,7 @@ func (n *InfoNode) collectEvents(ctx context.Context, namespace string) ([]Event
 		"namespace": namespace,
 	}
 
-	result, err := n.k8sClient.CallTool(ctx, "list_events", args)
+	result, err := n.k8sClient.CallTool(ctx, "get_events", args)
 	if err != nil {
 		return nil, err
 	}

@@ -219,6 +219,10 @@ func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]
 		}
 	}
 
+	// 记录工具调用前的信息
+	argsJSON, _ := json.Marshal(args)
+	fmt.Printf("[K8s MCP] 调用工具: %s, 参数: %s\n", name, string(argsJSON))
+
 	// 使用重试机制执行工具调用
 	result, err := client.RetryWithResult(
 		ctx,
@@ -233,6 +237,8 @@ func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]
 	)
 
 	if err != nil {
+		// 记录工具调用失败
+		fmt.Printf("[K8s MCP] 工具调用失败: %s, 错误: %v\n", name, err)
 		return nil, &ToolExecutionError{
 			ToolName: name,
 			Reason:   "failed to call tool after retries",
@@ -244,6 +250,9 @@ func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]
 	callToolResult := &CallToolResult{
 		Content: convertContent(result.Content),
 	}
+
+	// 记录工具调用成功
+	fmt.Printf("[K8s MCP] 工具调用成功: %s, 内容数量: %d\n", name, len(callToolResult.Content))
 
 	return callToolResult, nil
 }

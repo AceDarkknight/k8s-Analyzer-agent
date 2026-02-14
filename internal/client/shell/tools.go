@@ -5,9 +5,39 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// ErrKubectlBlocked kubectl 命令被阻止的错误
+var ErrKubectlBlocked = fmt.Errorf("kubectl commands are not allowed via Shell MCP; please use K8s MCP instead")
+
+// isKubectlCommand 检查命令是否为 kubectl 命令
+func isKubectlCommand(command string) bool {
+	// 转换为小写进行检测
+	lowerCmd := strings.ToLower(strings.TrimSpace(command))
+
+	// 检测各种 kubectl 变体
+	kubectlVariants := []string{
+		"kubectl",
+		"kubectl.exe",
+		"k8s",
+	}
+
+	for _, variant := range kubectlVariants {
+		// 检查命令是否以 kubectl 变体开头
+		if strings.HasPrefix(lowerCmd, variant+" ") || lowerCmd == variant {
+			return true
+		}
+		// 检查命令中是否包含 kubectl（处理 sudo kubectl 等情况）
+		if strings.Contains(lowerCmd, " "+variant+" ") || strings.HasPrefix(lowerCmd, variant+" ") {
+			return true
+		}
+	}
+
+	return false
+}
 
 // ExecuteResult 命令执行结果
 type ExecuteResult struct {
@@ -39,6 +69,12 @@ func (c *Client) ExecuteCommand(ctx context.Context, command string) (*ExecuteRe
 		return nil, fmt.Errorf("command is required")
 	}
 
+	// 检查是否为 kubectl 命令
+	if isKubectlCommand(command) {
+		fmt.Printf("[Shell MCP] 拒绝执行 kubectl 命令: %s\n", command)
+		return nil, ErrKubectlBlocked
+	}
+
 	result, err := c.CallTool(ctx, "execute_command", map[string]interface{}{
 		"command": command,
 	})
@@ -66,6 +102,12 @@ func (c *Client) ExecuteCommand(ctx context.Context, command string) (*ExecuteRe
 func (c *Client) ExecuteCommandWithTimeout(ctx context.Context, command string, timeout int) (*ExecuteResult, error) {
 	if command == "" {
 		return nil, fmt.Errorf("command is required")
+	}
+
+	// 检查是否为 kubectl 命令
+	if isKubectlCommand(command) {
+		fmt.Printf("[Shell MCP] 拒绝执行 kubectl 命令: %s\n", command)
+		return nil, ErrKubectlBlocked
 	}
 
 	args := map[string]interface{}{
