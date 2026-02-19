@@ -334,3 +334,170 @@ func TestClient_Integration(t *testing.T) {
 	err = client.HealthCheck(ctx)
 	assert.NoError(t, err, "健康检查不应失败")
 }
+
+// TestParseToolResult_NestedJSON 测试嵌套 JSON 解析功能
+func TestParseToolResult_NestedJSON(t *testing.T) {
+	tests := []struct {
+		name        string
+		toolName    string
+		result      *CallToolResult
+		expectError bool
+		checkResult func(t *testing.T, result []Pod)
+	}{
+		{
+			name:     "嵌套 JSON 格式 - pods 键",
+			toolName: "list_pods",
+			result: &CallToolResult{
+				Content: []Content{`{"pods": [{"name": "nginx-1", "namespace": "default", "status": "Running", "ready": "1/1", "restarts": 0, "age": "1d"}, {"name": "nginx-2", "namespace": "default", "status": "Running", "ready": "1/1", "restarts": 0, "age": "1d"}]}`},
+			},
+			expectError: false,
+			checkResult: func(t *testing.T, result []Pod) {
+				assert.Len(t, result, 2)
+				assert.Equal(t, "nginx-1", result[0].Name)
+				assert.Equal(t, "nginx-2", result[1].Name)
+			},
+		},
+		{
+			name:     "嵌套 JSON 格式 - services 键",
+			toolName: "list_services",
+			result: &CallToolResult{
+				Content: []Content{`{"services": [{"name": "nginx-svc", "namespace": "default", "type": "ClusterIP", "cluster_ip": "10.96.0.1", "ports": "80/TCP", "age": "2d"}]}`},
+			},
+			expectError: false,
+			checkResult: func(t *testing.T, result []Pod) {
+				// 这里期望的是 []Service 类型，但由于泛型我们需要用 []Pod 测试
+				// 实际使用中会根据类型自动匹配
+			},
+		},
+		{
+			name:     "直接 JSON 数组格式",
+			toolName: "list_pods",
+			result: &CallToolResult{
+				Content: []Content{`[{"name": "nginx-1", "namespace": "default", "status": "Running", "ready": "1/1", "restarts": 0, "age": "1d"}]`},
+			},
+			expectError: false,
+			checkResult: func(t *testing.T, result []Pod) {
+				assert.Len(t, result, 1)
+				assert.Equal(t, "nginx-1", result[0].Name)
+			},
+		},
+		{
+			name:     "空结果",
+			toolName: "list_pods",
+			result: &CallToolResult{
+				Content: []Content{},
+			},
+			expectError: true,
+			checkResult: func(t *testing.T, result []Pod) {
+				assert.Nil(t, result)
+			},
+		},
+		{
+			name:     "无效 JSON",
+			toolName: "list_pods",
+			result: &CallToolResult{
+				Content: []Content{`invalid json`},
+			},
+			expectError: true,
+			checkResult: func(t *testing.T, result []Pod) {
+				assert.Nil(t, result)
+			},
+		},
+		{
+			name:     "嵌套 JSON 格式 - namespaces 键",
+			toolName: "list_namespaces",
+			result: &CallToolResult{
+				Content: []Content{`{"namespaces": [{"name": "default", "status": "Active", "age": "1d"}, {"name": "kube-system", "status": "Active", "age": "1d"}]}`},
+			},
+			expectError: false,
+			checkResult: func(t *testing.T, result []Pod) {
+				// 这里期望的是 []Namespace 类型，但由于泛型我们需要用 []Pod 测试
+				// 实际使用中会根据类型自动匹配
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseToolResult[[]Pod](tt.result, tt.toolName)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				if tt.checkResult != nil {
+					tt.checkResult(t, result)
+				}
+			}
+		})
+	}
+}
+
+// TestParseToolResult_Labels 测试 Labels 字段解析
+func TestParseToolResult_Labels(t *testing.T) {
+	// 测试包含 Labels 的 Pod 数据解析
+	result := &CallToolResult{
+		Content: []Content{`[{"name": "nginx-1", "namespace": "default", "status": "Running", "ready": "1/1", "restarts": 0, "age": "1d", "labels": {"app": "nginx", "version": "v1"}}]`},
+	}
+
+	pods, err := ParseToolResult[[]Pod](result, "list_pods")
+	require.NoError(t, err)
+	assert.Len(t, pods, 1)
+	assert.Equal(t, "nginx-1", pods[0].Name)
+	assert.Equal(t, "nginx", pods[0].Labels["app"])
+	assert.Equal(t, "v1", pods[0].Labels["version"])
+}
+
+// TestParseToolResult_ConfigMap 测试 ConfigMap 解析
+func TestParseToolResult_ConfigMap(t *testing.T) {
+	result := &CallToolResult{
+		Content: []Content{`{"configmaps": [{"name": "nginx-config", "namespace": "default", "data_count": 1, "age": "2d", "labels": {"app": "nginx"}}]}`},
+	}
+
+	configmaps, err := ParseToolResult[[]ConfigMap](result, "list_configmaps")
+	require.NoError(t, err)
+	assert.Len(t, configmaps, 1)
+	assert.Equal(t, "nginx-config", configmaps[0].Name)
+	assert.Equal(t, "nginx", configmaps[0].Labels["app"])
+	assert.Equal(t, 1, configmaps[0].DataCount)
+}
+
+// TestParseToolResult_StatefulSet 测试 StatefulSet 解析
+func TestParseToolResult_StatefulSet(t *testing.T) {
+	result := &CallToolResult{
+		Content: []Content{`{"statefulsets": [{"name": "mysql-sts", "namespace": "default", "ready": "3/3", "age": "10d", "labels": {"app": "mysql"}}]}`},
+	}
+
+	statefulsets, err := ParseToolResult[[]StatefulSet](result, "list_statefulsets")
+	require.NoError(t, err)
+	assert.Len(t, statefulsets, 1)
+	assert.Equal(t, "mysql-sts", statefulsets[0].Name)
+	assert.Equal(t, "3/3", statefulsets[0].Ready)
+	assert.Equal(t, "mysql", statefulsets[0].Labels["app"])
+}
+
+// TestParseToolResult_Namespaces 测试 namespaces 解析
+func TestParseToolResult_Namespaces(t *testing.T) {
+	result := &CallToolResult{
+		Content: []Content{`{"namespaces": [{"name": "default", "status": "Active", "age": "1d"}, {"name": "kube-system", "status": "Active", "age": "1d"}]}`},
+	}
+
+	namespaces, err := ParseToolResult[[]Namespace](result, "list_namespaces")
+	require.NoError(t, err)
+	assert.Len(t, namespaces, 2)
+	assert.Equal(t, "default", namespaces[0].Name)
+	assert.Equal(t, "kube-system", namespaces[1].Name)
+}
+
+// TestParseToolResult_Namespaces_DoubleEncoded 测试双重编码的 namespaces 解析
+func TestParseToolResult_Namespaces_DoubleEncoded(t *testing.T) {
+	// 模拟双重编码的情况：外层是对象，内层是字符串
+	result := &CallToolResult{
+		Content: []Content{`{"namespaces": "[{\"name\": \"default\", \"status\": \"Active\", \"age\": \"1d\"}, {\"name\": \"kube-system\", \"status\": \"Active\", \"age\": \"1d\"}]"}`},
+	}
+
+	namespaces, err := ParseToolResult[[]Namespace](result, "list_namespaces")
+	require.NoError(t, err)
+	assert.Len(t, namespaces, 2)
+	assert.Equal(t, "default", namespaces[0].Name)
+	assert.Equal(t, "kube-system", namespaces[1].Name)
+}

@@ -3,7 +3,7 @@ module github.com/AceDarkknight/k8s-analyzer-agent
 go 1.25.1
 
 require (
-	github.com/AceDarkknight/k8s-mcp v0.0.0-20260202100737-08af119aba8c
+	github.com/AceDarkknight/k8s-mcp v0.0.0-20260219032929-af17612dc8cd
 	github.com/AceDarkknight/shell-executor-mcp v0.0.0-20260202094413-545fb1c24319
 	github.com/cloudwego/eino v0.7.25
 	github.com/modelcontextprotocol/go-sdk v1.2.0

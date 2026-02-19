@@ -1,5 +1,5 @@
-github.com/AceDarkknight/k8s-mcp v0.0.0-20260202100737-08af119aba8c h1:UJyXzmT9SBvZbLmzayrs8nBSIH2/nC3A2HOlrPwBcz4=
-github.com/AceDarkknight/k8s-mcp v0.0.0-20260202100737-08af119aba8c/go.mod h1:lClyvXk6hsjD7lPF0r1qQ5QCKzCGDJwcjwx0Yzj5+n8=
+github.com/AceDarkknight/k8s-mcp v0.0.0-20260219032929-af17612dc8cd h1:IRYx+BGSi5FMaY29DlEFs+f/cidU94sHDJDtUmgJ4lA=
+github.com/AceDarkknight/k8s-mcp v0.0.0-20260219032929-af17612dc8cd/go.mod h1:lClyvXk6hsjD7lPF0r1qQ5QCKzCGDJwcjwx0Yzj5+n8=
 github.com/AceDarkknight/shell-executor-mcp v0.0.0-20260202094413-545fb1c24319 h1:67m3r9INNJASTFz8QhoP/xBD6p14vU67m6ZpQdKlNo0=
 github.com/AceDarkknight/shell-executor-mcp v0.0.0-20260202094413-545fb1c24319/go.mod h1:rKLqUQ7cEvEd5zjwKsMaE2iY24NGmaHc1pkfJCqPiss=
 github.com/airbrake/gobrake v3.6.1+incompatible/go.mod h1:wM4gu3Cn0W0K7GUuVWnlXZU11AGBXMILnrdOU8Kn00o=

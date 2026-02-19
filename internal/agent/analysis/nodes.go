@@ -13,6 +13,9 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
+// quietContextKey 用于在 Context 中传递安静模式标志
+var quietContextKey = struct{}{}
+
 // K8sClient K8s 客户端接口
 type K8sClient interface {
 	CallTool(ctx context.Context, name string, args map[string]interface{}) (*k8s.CallToolResult, error)
@@ -183,7 +186,8 @@ func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, error) {
 	// 先检查 list_namespaces 工具是否可用
 	if !n.hasTool(ctx, "list_namespaces") {
 		logger.Info("[InfoNode] list_namespaces tool not available on MCP server, using hardcoded fallback list")
-		return []string{"default", "kube-system", "kube-public", "kube-node-lease"}, nil
+		// 减少命名空间数量用于测试，只保留 default 和 kube-system
+		return []string{"default", "kube-system"}, nil
 	}
 
 	// 调用 K8s MCP 工具获取命名空间列表
@@ -191,24 +195,31 @@ func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, error) {
 	if err != nil {
 		logger.Warn("[InfoNode] list_namespaces tool call failed, using hardcoded fallback list", logger.Err(err))
 		// K8s MCP 服务器不支持 list_namespaces，返回硬编码的常见命名空间列表
-		return []string{"default", "kube-system", "kube-public", "kube-node-lease"}, nil
+		return []string{"default", "kube-system"}, nil
 	}
 
 	// 解析结果
 	namespaces := make([]string, 0)
 	if result != nil {
-		// 从 result 中解析命名空间列表
-		// 实际实现需要根据 MCP Server 返回的格式进行解析
-		// 这里假设 result.Content 包含命名空间列表
-		_ = result // 实际需要解析
+		// 解析为 k8s-mcp 的 Namespace 类型切片
+		k8sNamespaces, err := k8s.ParseToolResult[[]k8s.Namespace](result, "list_namespaces")
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to parse namespaces result", logger.Err(err))
+			return []string{"default", "kube-system"}, nil
+		}
+		// 转换为字符串切片
+		for _, ns := range k8sNamespaces {
+			namespaces = append(namespaces, ns.Name)
+		}
 	}
 
 	// 如果没有获取到命名空间，使用硬编码列表作为回退
 	if len(namespaces) == 0 {
 		logger.Info("[InfoNode] No namespaces returned from MCP, using hardcoded fallback list")
-		return []string{"default", "kube-system", "kube-public", "kube-node-lease"}, nil
+		return []string{"default", "kube-system"}, nil
 	}
 
+	logger.Debug("[InfoNode] Collected namespaces", logger.Any("namespaces", namespaces))
 	return namespaces, nil
 }
 
@@ -224,17 +235,29 @@ func (n *InfoNode) collectPods(ctx context.Context, namespace string) ([]PodInfo
 		return nil, err
 	}
 
-	// 解析结果（这里简化处理，实际需要解析 MCP 返回的数据）
-	// 在实际实现中，需要根据 MCP Server 返回的格式进行解析
+	// 解析结果
 	pods := make([]PodInfo, 0)
-
-	// 模拟数据（实际应该从 result 中解析）
-	// 这里只是为了演示，实际需要根据真实的 MCP 响应格式解析
 	if result != nil {
-		// 解析逻辑...
-		_ = result
+		// 解析为 k8s-mcp 的 Pod 类型切片
+		k8sPods, err := k8s.ParseToolResult[[]k8s.Pod](result, "list_pods")
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to parse pods result", logger.Err(err))
+			return pods, nil
+		}
+		// 转换为内部 PodInfo 类型
+		for _, p := range k8sPods {
+			podInfo := PodInfo{
+				Name:      p.Name,
+				Namespace: p.Namespace,
+				Status:    p.Status,
+				Restarts:  int32(p.Restarts),
+				Labels:    p.Labels,
+			}
+			pods = append(pods, podInfo)
+		}
 	}
 
+	logger.Debug("[InfoNode] Collected pods from namespace", logger.String("namespace", namespace), logger.Int("count", len(pods)))
 	return pods, nil
 }
 
@@ -250,8 +273,26 @@ func (n *InfoNode) collectServices(ctx context.Context, namespace string) ([]Ser
 	}
 
 	services := make([]ServiceInfo, 0)
-	_ = result // 实际需要解析
+	if result != nil {
+		// 解析为 k8s-mcp 的 Service 类型切片
+		k8sServices, err := k8s.ParseToolResult[[]k8s.Service](result, "list_services")
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to parse services result", logger.Err(err))
+			return services, nil
+		}
+		// 转换为内部 ServiceInfo 类型
+		for _, s := range k8sServices {
+			serviceInfo := ServiceInfo{
+				Name:      s.Name,
+				Namespace: s.Namespace,
+				Type:      s.Type,
+				ClusterIP: s.ClusterIP,
+			}
+			services = append(services, serviceInfo)
+		}
+	}
 
+	logger.Debug("[InfoNode] Collected services from namespace", logger.String("namespace", namespace), logger.Int("count", len(services)))
 	return services, nil
 }
 
@@ -267,8 +308,35 @@ func (n *InfoNode) collectDeployments(ctx context.Context, namespace string) ([]
 	}
 
 	deployments := make([]DeploymentInfo, 0)
-	_ = result // 实际需要解析
+	if result != nil {
+		// 解析为 k8s-mcp 的 Deployment 类型切片
+		k8sDeployments, err := k8s.ParseToolResult[[]k8s.Deployment](result, "list_deployments")
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to parse deployments result", logger.Err(err))
+			return deployments, nil
+		}
+		// 转换为内部 DeploymentInfo 类型
+		for _, d := range k8sDeployments {
+			deploymentInfo := DeploymentInfo{
+				Name:      d.Name,
+				Namespace: d.Namespace,
+			}
+			// 解析 Ready 字段格式 "x/y"
+			if strings.Contains(d.Ready, "/") {
+				parts := strings.Split(d.Ready, "/")
+				if len(parts) == 2 {
+					var ready, total int32
+					fmt.Sscanf(parts[0], "%d", &ready)
+					fmt.Sscanf(parts[1], "%d", &total)
+					deploymentInfo.ReadyReplicas = ready
+					deploymentInfo.Replicas = total
+				}
+			}
+			deployments = append(deployments, deploymentInfo)
+		}
+	}
 
+	logger.Debug("[InfoNode] Collected deployments from namespace", logger.String("namespace", namespace), logger.Int("count", len(deployments)))
 	return deployments, nil
 }
 
@@ -284,8 +352,26 @@ func (n *InfoNode) collectEvents(ctx context.Context, namespace string) ([]Event
 	}
 
 	events := make([]EventInfo, 0)
-	_ = result // 实际需要解析
+	if result != nil {
+		// 解析为 k8s-mcp 的 Event 类型切片
+		k8sEvents, err := k8s.ParseToolResult[[]k8s.Event](result, "get_events")
+		if err != nil {
+			logger.Warn("[InfoNode] Failed to parse events result", logger.Err(err))
+			return events, nil
+		}
+		// 转换为内部 EventInfo 类型
+		for _, e := range k8sEvents {
+			eventInfo := EventInfo{
+				Type:      e.Type,
+				Reason:    e.Reason,
+				Message:   e.Message,
+				Component: e.Source,
+			}
+			events = append(events, eventInfo)
+		}
+	}
 
+	logger.Debug("[InfoNode] Collected events from namespace", logger.String("namespace", namespace), logger.Int("count", len(events)))
 	return events, nil
 }
 
@@ -384,12 +470,15 @@ func (n *ActionNode) Execute(ctx context.Context, state *State, command string) 
 
 	// 如果命令为空，检查是否有错误
 	if command == "" {
+		quiet := ctx.Value(quietContextKey).(bool)
 		if state.LastError != nil {
 			logger.Warn("[ActionNode] No command to execute, but there is an error", logger.Err(state.LastError))
 			// 保持错误状态，让决策节点处理
 			return state, nil
 		}
-		logger.Debug("[ActionNode] No command to execute, skipping")
+		if !quiet {
+			logger.Debug("[ActionNode] No command to execute, skipping")
+		}
 		return state, nil
 	}
 

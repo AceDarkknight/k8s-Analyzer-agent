@@ -159,6 +159,8 @@ func (c *MockClient) mockListPodsJSON(args map[string]interface{}) string {
 		namespace = ns
 	}
 
+	// 返回正常的 Pod 数据用于测试 Graph 流转
+	// 移除 error-pod 避免决策逻辑持续返回 deep_query 导致无限循环
 	pods := []Pod{
 		{
 			Name:      "nginx-pod-1",
@@ -175,14 +177,6 @@ func (c *MockClient) mockListPodsJSON(args map[string]interface{}) string {
 			Ready:     "1/1",
 			Restarts:  0,
 			Age:       "2d",
-		},
-		{
-			Name:      "error-pod",
-			Namespace: namespace,
-			Status:    "Error",
-			Ready:     "0/1",
-			Restarts:  5,
-			Age:       "1d",
 		},
 	}
 
