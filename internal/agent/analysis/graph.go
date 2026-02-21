@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/cloudwego/eino/compose"
@@ -114,6 +115,9 @@ func (a *Agent) LoadTools(ctx context.Context) error {
 		})
 	}
 
+	// 增强工具描述，添加使用指导
+	tools = k8s.EnhanceToolDescriptions(tools)
+
 	// 存储工具列表
 	a.tools = tools
 
@@ -136,7 +140,7 @@ func (a *Agent) buildGraph() error {
 	// 创建节点
 	infoNode := NewInfoNode(a.k8sClient)
 	decisionNode := NewDecisionNode(a.llm)
-	actionNode := NewActionNode(a.safetyAgent)
+	actionNode := NewActionNode(a.safetyAgent, a.k8sClient)
 	reportNode := NewReportNode()
 	commandGenerator := NewCommandGenerator()
 
@@ -178,7 +182,7 @@ func (a *Agent) buildGraph() error {
 			state.IterationCount++
 
 			// 生成要执行的命令
-			command, err := commandGenerator.GenerateCommand(state)
+			toolCall, err := commandGenerator.GenerateCommand(state)
 			if err != nil {
 				logger.Error("Failed to generate command", logger.Err(err))
 				// 设置错误状态，让决策节点处理
@@ -187,14 +191,14 @@ func (a *Agent) buildGraph() error {
 			}
 
 			// 如果没有命令可执行，设置标志让决策节点知道
-			if command == "" {
+			if toolCall == nil {
 				logger.Debug("No new command to execute, proceeding to decision")
 				state.LastAction = "no_command"
 				return state, nil
 			}
 
 			// 执行命令
-			return actionNode.Execute(ctx, state, command)
+			return actionNode.Execute(ctx, state, toolCall)
 		},
 	)); err != nil {
 		return fmt.Errorf("failed to add action node: %w", err)

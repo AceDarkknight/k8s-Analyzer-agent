@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-mcp/pkg/mcpclient"
 	"github.com/AceDarkknight/k8s-mcp/pkg/types"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -38,7 +39,7 @@ var resourceKeyMapping = map[string]string{
 	// "list_ingresses":              "ingresses",
 }
 
-// CallToolResultToMCP 将自定义 CallToolResult 转换为 mcp.CallToolResult
+// CallToolResultToMcp 将自定义 CallToolResult 转换为 mcp.CallToolResult
 // 用于与 k8s-mcp 的 DecodeResult 方法兼容
 func CallToolResultToMcp(result *CallToolResult) *mcp.CallToolResult {
 	if result == nil {
@@ -226,7 +227,7 @@ func extractResourceKey(textData string) string {
 
 	for _, key := range commonKeys {
 		// 使用更精确的匹配：查找 "key": 格式
-		pattern := `"` + key + `":`
+		pattern := `"` + key + `"`
 		if strings.Contains(textData, pattern) {
 			return key
 		}
@@ -292,3 +293,44 @@ type (
 	// Namespace 命名空间信息
 	Namespace = types.Namespace
 )
+
+// toolDescriptionEnhancements 定义工具描述的增强内容
+// key: 工具名称, value: 增强的描述信息
+var toolDescriptionEnhancements = map[string]string{
+	// Pod 日志工具 - 强调必须使用此工具而非 kubectl logs
+	"get_pod_logs": "\n\n⚠️ **重要**: 获取 Pod 日志必须使用此工具，**不要**使用 kubectl logs 命令。",
+	// 资源列表工具 - 强调必须使用 K8s MCP 工具
+	"list_pods":        "\n\n⚠️ **重要**: 获取 Pod 列表必须使用此工具，**不要**使用 kubectl get pods 命令。",
+	"list_services":    "\n\n⚠️ **重要**: 获取 Service 列表必须使用此工具，**不要**使用 kubectl get services 命令。",
+	"list_deployments": "\n\n⚠️ **重要**: 获取 Deployment 列表必须使用此工具，**不要**使用 kubectl get deployments 命令。",
+	"list_namespaces":  "\n\n⚠️ **重要**: 获取命名空间列表必须使用此工具，**不要**使用 kubectl get namespaces 命令。",
+	"list_nodes":       "\n\n⚠️ **重要**: 获取节点列表必须使用此工具，**不要**使用 kubectl get nodes 命令。",
+	"list_events":      "\n\n⚠️ **重要**: 获取事件必须使用此工具，**不要**使用 kubectl get events 命令。",
+	"get_events":       "\n\n⚠️ **重要**: 获取事件必须使用此工具，**不要**使用 kubectl get events 命令。",
+	// 资源获取工具 - 强调必须使用 K8s MCP 工具
+	"get_resources": "\n\n⚠️ **重要**: 获取资源信息必须使用此工具，**不要**使用 kubectl get 命令。",
+}
+
+// EnhanceToolDescriptions 增强工具描述，添加使用指导
+// 这个函数为常见的 K8s 工具添加使用约束说明，使 LLM 知道必须使用 MCP 工具而非 kubectl 命令
+// 参数 tools: 从 MCP Server 获取的工具列表 (client.Tool 类型)
+// 返回: 增强描述后的工具列表
+func EnhanceToolDescriptions(tools []client.Tool) []client.Tool {
+	if len(tools) == 0 {
+		return tools
+	}
+
+	// 创建副本避免修改原数组
+	enhanced := make([]client.Tool, len(tools))
+	copy(enhanced, tools)
+
+	for i, tool := range enhanced {
+		// 检查是否有增强内容
+		if enhancement, ok := toolDescriptionEnhancements[tool.Name]; ok {
+			// 将增强描述放在开头，使 LLM 能更早注意到重要警告
+			enhanced[i].Description = enhancement + "\n\n" + tool.Description
+		}
+	}
+
+	return enhanced
+}

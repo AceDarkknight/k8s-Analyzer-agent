@@ -455,21 +455,24 @@ func (n *DecisionNode) fallbackDecision(state *State) Decision {
 // 调用 Safety Agent 执行命令
 type ActionNode struct {
 	safetyAgent SafetyAgent
+	k8sClient   K8sClient // K8s MCP 客户端，用于执行 K8s 工具调用
 }
 
 // NewActionNode 创建新的 ActionNode
-func NewActionNode(safetyAgent SafetyAgent) *ActionNode {
+func NewActionNode(safetyAgent SafetyAgent, k8sClient K8sClient) *ActionNode {
 	return &ActionNode{
 		safetyAgent: safetyAgent,
+		k8sClient:   k8sClient,
 	}
 }
 
 // Execute 执行命令
-func (n *ActionNode) Execute(ctx context.Context, state *State, command string) (*State, error) {
-	logger.Info("[ActionNode] Executing command", logger.String("command", command))
+// 支持两种命令类型：K8s MCP 工具调用 和 Shell 命令
+func (n *ActionNode) Execute(ctx context.Context, state *State, toolCall *ToolCall) (*State, error) {
+	logger.Info("[ActionNode] Executing command", logger.Any("toolCall", toolCall))
 
 	// 如果命令为空，检查是否有错误
-	if command == "" {
+	if toolCall == nil {
 		quiet := ctx.Value(quietContextKey).(bool)
 		if state.LastError != nil {
 			logger.Warn("[ActionNode] No command to execute, but there is an error", logger.Err(state.LastError))
@@ -481,6 +484,54 @@ func (n *ActionNode) Execute(ctx context.Context, state *State, command string) 
 		}
 		return state, nil
 	}
+
+	// 根据命令类型执行不同的逻辑
+	if toolCall.Type == "k8s" {
+		// 执行 K8s MCP 工具调用
+		return n.executeK8sTool(ctx, state, toolCall)
+	}
+
+	// 否则，使用 Safety Agent 执行 Shell 命令（兼容旧逻辑）
+	return n.executeShellCommand(ctx, state, toolCall.Command)
+}
+
+// executeK8sTool 执行 K8s MCP 工具调用
+func (n *ActionNode) executeK8sTool(ctx context.Context, state *State, toolCall *ToolCall) (*State, error) {
+	logger.Info("[ActionNode] Executing K8s MCP tool", logger.String("tool", toolCall.Tool))
+
+	// 调用 K8s MCP 工具
+	result, err := n.k8sClient.CallTool(ctx, toolCall.Tool, toolCall.Args)
+	if err != nil {
+		logger.Error("[ActionNode] K8s tool execution failed", logger.Err(err), logger.String("tool", toolCall.Tool))
+
+		state.LastError = err
+		state.AddCommandExecution(toolCall.Command, err.Error(), false)
+		return state, nil // 不返回错误，让决策节点处理
+	}
+
+	// 解析结果为字符串
+	output, err := k8s.ParseToolResultAsString(result)
+	if err != nil {
+		logger.Warn("[ActionNode] Failed to parse K8s tool result", logger.Err(err))
+		output = fmt.Sprintf("Tool executed but failed to parse result: %v", err)
+	}
+
+	logger.Info("[ActionNode] K8s tool executed successfully", logger.String("tool", toolCall.Tool))
+	state.AddCommandExecution(toolCall.Command, output, true)
+	state.LastAction = toolCall.Command
+
+	// 清除 LastError，因为命令执行成功
+	state.LastError = nil
+
+	// 解析输出并更新状态
+	n.parseCommandOutput(state, toolCall.Command, output)
+
+	return state, nil
+}
+
+// executeShellCommand 执行 Shell 命令（兼容旧逻辑）
+func (n *ActionNode) executeShellCommand(ctx context.Context, state *State, command string) (*State, error) {
+	logger.Info("[ActionNode] Executing shell command", logger.String("command", command))
 
 	// 调用 Safety Agent 执行命令
 	output, err := n.safetyAgent.ExecuteSafeCommand(ctx, command)

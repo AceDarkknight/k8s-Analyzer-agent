@@ -1,4 +1,4 @@
-// Package analysis 提供 LLM 接口和实现
+// Package analysis provides LLM interfaces and implementations
 package analysis
 
 import (
@@ -35,13 +35,12 @@ const SystemPrompt = `## 系统角色
 
 ### 工具使用约束
 - **禁止生成 shell 命令**: 绝对不要生成类似 'kubectl get pods' 的 shell 命令。
-- **必须使用 K8s MCP 工具**: 你必须使用提供的 K8s MCP 工具（如 'list_pods', 'list_services', 'list_namespaces' 等）来获取集群信息。
-- **工具名称对照**:
-  - 获取命名空间列表: 使用 'list_namespaces' 工具
-  - 获取 Pod 列表: 使用 'list_pods' 工具（需要 namespace 参数）
-  - 获取 Service 列表: 使用 'list_services' 工具（需要 namespace 参数）
-  - 获取 Deployment 列表: 使用 'list_deployments' 工具（需要 namespace 参数）
-  - 获取事件: 使用 'get_events' 工具（需要 namespace 参数）
+- **必须使用 K8s MCP 工具**: 你必须使用提供的 K8s MCP 工具来获取集群信息，不要使用 kubectl 命令。
+- **🚫 禁止使用 Shell MCP 执行 kubectl 命令**: 
+  - **绝对禁止**使用 Shell MCP 的 execute_command 工具来运行 kubectl 命令。
+  - **所有 Kubernetes 操作必须使用 K8s MCP 工具**。
+  - 违反此规则将导致任务被系统拒绝。
+- **⚡ 严格遵守工具使用说明**: 下方 "可用工具列表" 中每个工具都有特定的使用约束和警告说明，**必须严格遵守**。特别关注带有 "⚠️" 标记的重要提示。
 
 ### 命名空间范围约束
 - **不要假设只有 'default' 命名空间**: 集群中可能存在多个命名空间，你必须检查所有命名空间。
@@ -238,10 +237,32 @@ func (llm *RuleBasedLLM) SetTools(tools []client.Tool) {
 		logger.Int("count", len(tools)),
 		logger.String("model", llm.modelName))
 
+	// 打印每个工具的名称和描述（用于验证增强是否生效）
+	if len(tools) > 0 {
+		logger.Debug("[RuleBasedLLM] Tool descriptions for verification:")
+		for i, tool := range tools {
+			// 检查描述中是否包含增强标记
+			hasEnhancement := strings.Contains(tool.Description, "⚠️")
+			logger.Debug(fmt.Sprintf("[RuleBasedLLM] Tool[%d] name=%s, has_enhancement=%v, description_len=%d",
+				i, tool.Name, hasEnhancement, len(tool.Description)))
+			// 打印增强描述的前100个字符用于确认
+			if hasEnhancement {
+				descPreview := tool.Description
+				if len(descPreview) > 150 {
+					descPreview = descPreview[:150] + "..."
+				}
+				logger.Debug("[RuleBasedLLM] Enhanced description preview",
+					logger.String("tool", tool.Name),
+					logger.String("preview", descPreview))
+			}
+		}
+	}
+
 	// 记录格式化后的工具提示（用于验证）
 	if len(tools) > 0 {
 		toolsPrompt := llm.FormatToolsPrompt()
 		logger.Debug("[RuleBasedLLM] Tools formatted for prompt",
+			logger.String("prompt_length", fmt.Sprintf("%d", len(toolsPrompt))),
 			logger.String("prompt_preview", toolsPrompt))
 	}
 }
@@ -502,7 +523,15 @@ func (m *MockLLM) SetTools(tools []client.Tool) {
 
 // CommandGenerator 命令生成器
 // 根据当前状态生成要执行的命令
-type CommandGenerator struct {
+type CommandGenerator struct{}
+
+// ToolCall K8s MCP 工具调用结构
+// 用于表示要执行的 K8s MCP 工具及其参数
+type ToolCall struct {
+	Tool    string                 `json:"tool"`    // 工具名称，如 "get_pod_logs"
+	Args    map[string]interface{} `json:"args"`    // 工具参数
+	Type    string                 `json:"type"`    // 调用类型："k8s" 或 "shell"
+	Command string                 `json:"command"` // 原始命令字符串（用于兼容和日志）
 }
 
 // NewCommandGenerator 创建命令生成器
@@ -511,7 +540,8 @@ func NewCommandGenerator() *CommandGenerator {
 }
 
 // GenerateCommand 生成命令
-func (g *CommandGenerator) GenerateCommand(state *State) (string, error) {
+// 返回 K8s MCP 工具调用而不是 shell 命令
+func (g *CommandGenerator) GenerateCommand(state *State) (*ToolCall, error) {
 	logger.Debug("[CommandGenerator] Generating command", logger.Int("iteration", state.IterationCount))
 
 	// 检查是否已有足够的 K8s 资源数据
@@ -526,54 +556,81 @@ func (g *CommandGenerator) GenerateCommand(state *State) (string, error) {
 		// 检查是否有错误 Pod 需要查看日志
 		for _, pod := range state.K8sInfo.Pods {
 			if pod.Status == "Error" || pod.Status == "CrashLoopBackOff" {
-				// 生成查看日志的命令
-				cmd := fmt.Sprintf("kubectl logs %s -n %s", pod.Name, pod.Namespace)
+				// 生成 K8s MCP 工具调用获取日志
+				toolCall := &ToolCall{
+					Tool: "get_pod_logs",
+					Args: map[string]interface{}{
+						"pod_name":  pod.Name,
+						"namespace": pod.Namespace,
+					},
+					Type:    "k8s",
+					Command: fmt.Sprintf("get_pod_logs pod_name=%s namespace=%s", pod.Name, pod.Namespace),
+				}
 				// 检查是否已执行过此命令
-				if !g.isCommandExecuted(state, cmd) {
-					logger.Debug("[CommandGenerator] Generated command for error pod", logger.String("command", cmd))
-					return cmd, nil
+				if !g.isToolCallExecuted(state, toolCall) {
+					logger.Debug("[CommandGenerator] Generated K8s tool call for error pod",
+						logger.String("tool", toolCall.Tool),
+						logger.String("pod", pod.Name))
+					return toolCall, nil
 				}
 			}
 			if pod.Restarts > 3 {
-				// Pod 重启次数过多，查看日志
-				cmd := fmt.Sprintf("kubectl logs %s -n %s --previous", pod.Name, pod.Namespace)
+				// Pod 重启次数过多，查看上一次容器日志
+				toolCall := &ToolCall{
+					Tool: "get_pod_logs",
+					Args: map[string]interface{}{
+						"pod_name":  pod.Name,
+						"namespace": pod.Namespace,
+						"previous":  true,
+					},
+					Type:    "k8s",
+					Command: fmt.Sprintf("get_pod_logs pod_name=%s namespace=%s previous=true", pod.Name, pod.Namespace),
+				}
 				// 检查是否已执行过此命令
-				if !g.isCommandExecuted(state, cmd) {
-					logger.Debug("[CommandGenerator] Generated command for high restart pod", logger.String("command", cmd))
-					return cmd, nil
+				if !g.isToolCallExecuted(state, toolCall) {
+					logger.Debug("[CommandGenerator] Generated K8s tool call for high restart pod",
+						logger.String("tool", toolCall.Tool),
+						logger.String("pod", pod.Name))
+					return toolCall, nil
 				}
 			}
 		}
 
-		// 检查是否有 Service，生成网络测试命令
-		if len(state.K8sInfo.Services) > 0 {
-			svc := state.K8sInfo.Services[0]
-			if svc.ClusterIP != "" {
-				cmd := fmt.Sprintf("curl -I http://%s:%d", svc.ClusterIP, 80)
-				// 检查是否已执行过此命令
-				if !g.isCommandExecuted(state, cmd) {
-					logger.Debug("[CommandGenerator] Generated network test command", logger.String("command", cmd))
-					return cmd, nil
-				}
-			}
-		}
+		// 检查是否有 Service，尝试获取 Service 详细信息（如果需要）
+		// 注意：网络连通性测试目前仍使用 curl，我们暂时跳过这部分
+		// 后续可以添加类似 "check_service_connectivity" 的 K8s MCP 工具
 
 		// 已有数据且无特定问题需要深入分析，返回空命令表示无需更多操作
 		logger.Debug("[CommandGenerator] Already have K8s resources data, no need to fetch again")
-		return "", nil
+		return nil, nil
 	}
 
 	// 没有足够的 K8s 资源数据时，返回空命令
 	// InfoNode 应该已经通过 K8s MCP 工具收集了数据
 	logger.Debug("[CommandGenerator] No K8s resources data available, waiting for InfoNode to collect")
-	return "", nil
+	return nil, nil
 }
 
-// isCommandExecuted 检查命令是否已经执行过
-func (g *CommandGenerator) isCommandExecuted(state *State, cmd string) bool {
+// isToolCallExecuted 检查 K8s 工具调用是否已经执行过
+// 通过比较工具名称和参数来判断
+func (g *CommandGenerator) isToolCallExecuted(state *State, toolCall *ToolCall) bool {
 	for _, executedCmd := range state.AnalysisResult.ExecutedCommands {
-		if executedCmd.Command == cmd {
+		// 如果原始命令匹配，也认为是已执行
+		if executedCmd.Command == toolCall.Command {
 			return true
+		}
+		// 如果是 K8s 工具调用，检查工具名称和关键参数
+		if toolCall.Type == "k8s" {
+			// 尝试解析已执行的命令是否为 K8s 工具调用格式
+			// 这里简化处理：如果命令包含相同的工具名称和 Pod/Namespace，则认为已执行
+			if strings.Contains(executedCmd.Command, toolCall.Tool) {
+				// 检查参数是否匹配（支持 pod_name 和 pod 两种格式）
+				if pod, ok := toolCall.Args["pod_name"].(string); ok {
+					if strings.Contains(executedCmd.Command, "pod_name="+pod) || strings.Contains(executedCmd.Command, "pod="+pod) || strings.Contains(executedCmd.Command, pod+" ") {
+						return true
+					}
+				}
+			}
 		}
 	}
 	return false

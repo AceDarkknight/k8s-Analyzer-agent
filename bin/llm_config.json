@@ -1,9 +1,9 @@
 {
   "analysis": {
     "provider": "rule-based",
-    "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+    "base_url": "https://openrouter.ai/api/v1/chat/completions",
     "api_key": "",
-    "model": "glm-4.7",
+    "model": "minimax/minimax-m2.5",
     "temperature": 0.8,
     "max_tokens": 8000
   },
