@@ -3,13 +3,12 @@ package analysis
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
-	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
@@ -95,379 +94,11 @@ type LLM interface {
 	// SetTools 设置可用的工具列表
 	// 用于动态注入工具信息到 LLM Prompt 中
 	SetTools(tools []client.Tool)
-}
 
-// RuleBasedLLM 基于规则的 LLM 实现
-// 使用预定义规则进行决策，不需要真实的 LLM API
-type RuleBasedLLM struct {
-	rules     []DecisionRule
-	modelName string        // 模型名称（从配置中传入）
-	tools     []client.Tool // 可用的工具列表
-}
-
-// DecisionRule 决策规则
-type DecisionRule struct {
-	// Name 规则名称
-	Name string
-
-	// Condition 判断条件函数
-	Condition func(*State) bool
-
-	// Action 决策动作
-	Action Decision
-
-	// Priority 优先级（数字越小优先级越高）
-	Priority int
-}
-
-// NewRuleBasedLLM 创建基于规则的 LLM
-func NewRuleBasedLLM(llmConfig *config.LLMConfig) *RuleBasedLLM {
-	llm := &RuleBasedLLM{
-		rules:     make([]DecisionRule, 0),
-		modelName: llmConfig.Model,
-	}
-
-	// 初始化默认规则
-	llm.initDefaultRules()
-
-	// 记录使用的模型
-	logger.Info("[Analysis] RuleBasedLLM initialized",
-		logger.String("model", llm.modelName),
-		logger.String("provider", llmConfig.Provider))
-
-	return llm
-}
-
-// initDefaultRules 初始化默认决策规则
-func (llm *RuleBasedLLM) initDefaultRules() {
-	llm.rules = []DecisionRule{
-		{
-			Name: "max_iterations_reached",
-			Condition: func(s *State) bool {
-				return s.IterationCount >= s.MaxIterations
-			},
-			Action:   DecisionReport,
-			Priority: 1,
-		},
-		{
-			Name: "no_command_to_execute",
-			Condition: func(s *State) bool {
-				return s.LastAction == "no_command"
-			},
-			Action:   DecisionReport,
-			Priority: 2,
-		},
-		{
-			Name: "pod_error_detected",
-			Condition: func(s *State) bool {
-				for _, pod := range s.K8sInfo.Pods {
-					if pod.Status == "Error" || pod.Status == "CrashLoopBackOff" {
-						return true
-					}
-				}
-				return false
-			},
-			Action:   DecisionDeepQuery,
-			Priority: 3,
-		},
-		{
-			Name: "pod_high_restarts",
-			Condition: func(s *State) bool {
-				for _, pod := range s.K8sInfo.Pods {
-					if pod.Restarts > 5 {
-						return true
-					}
-				}
-				return false
-			},
-			Action:   DecisionDeepQuery,
-			Priority: 4,
-		},
-		{
-			Name: "warning_events_detected",
-			Condition: func(s *State) bool {
-				for _, event := range s.K8sInfo.Events {
-					if event.Type == "Warning" {
-						return true
-					}
-				}
-				return false
-			},
-			Action:   DecisionDeepQuery,
-			Priority: 5,
-		},
-		{
-			Name: "error_occurred",
-			Condition: func(s *State) bool {
-				return s.LastError != nil
-			},
-			Action:   DecisionReport,
-			Priority: 6,
-		},
-		{
-			Name: "has_enough_info",
-			Condition: func(s *State) bool {
-				// 如果已经收集了足够的信息（至少一次迭代，且有数据）
-				return s.IterationCount > 0 &&
-					(len(s.K8sInfo.Pods) > 0 || len(s.K8sInfo.Services) > 0)
-			},
-			Action:   DecisionReport,
-			Priority: 7,
-		},
-		{
-			Name: "default_continue",
-			Condition: func(s *State) bool {
-				return true // 默认规则，总是匹配
-			},
-			Action:   DecisionDeepQuery,
-			Priority: 10,
-		},
-	}
-}
-
-// AddRule 添加自定义规则
-func (llm *RuleBasedLLM) AddRule(rule DecisionRule) {
-	llm.rules = append(llm.rules, rule)
-}
-
-// SetTools 设置可用的工具列表
-func (llm *RuleBasedLLM) SetTools(tools []client.Tool) {
-	llm.tools = tools
-	logger.Info("[RuleBasedLLM] Tools set",
-		logger.Int("count", len(tools)),
-		logger.String("model", llm.modelName))
-
-	// 打印每个工具的名称和描述（用于验证增强是否生效）
-	if len(tools) > 0 {
-		logger.Debug("[RuleBasedLLM] Tool descriptions for verification:")
-		for i, tool := range tools {
-			// 检查描述中是否包含增强标记
-			hasEnhancement := strings.Contains(tool.Description, "⚠️")
-			logger.Debug(fmt.Sprintf("[RuleBasedLLM] Tool[%d] name=%s, has_enhancement=%v, description_len=%d",
-				i, tool.Name, hasEnhancement, len(tool.Description)))
-			// 打印增强描述的前100个字符用于确认
-			if hasEnhancement {
-				descPreview := tool.Description
-				if len(descPreview) > 150 {
-					descPreview = descPreview[:150] + "..."
-				}
-				logger.Debug("[RuleBasedLLM] Enhanced description preview",
-					logger.String("tool", tool.Name),
-					logger.String("preview", descPreview))
-			}
-		}
-	}
-
-	// 记录格式化后的工具提示（用于验证）
-	if len(tools) > 0 {
-		toolsPrompt := llm.FormatToolsPrompt()
-		logger.Debug("[RuleBasedLLM] Tools formatted for prompt",
-			logger.String("prompt_length", fmt.Sprintf("%d", len(toolsPrompt))),
-			logger.String("prompt_preview", toolsPrompt))
-	}
-}
-
-// FormatToolsPrompt 格式化工具列表为 LLM Prompt
-// 返回包含所有工具描述的字符串，可注入到 System Prompt 中
-func (llm *RuleBasedLLM) FormatToolsPrompt() string {
-	var prompt strings.Builder
-
-	// 添加系统提示词
-	prompt.WriteString(SystemPrompt)
-
-	if len(llm.tools) == 0 {
-		prompt.WriteString("## 可用工具列表\n\n当前没有可用的工具。\n")
-		return prompt.String()
-	}
-
-	prompt.WriteString("## 可用工具列表\n\n")
-	prompt.WriteString("以下是您可以使用的工具，每个工具都有特定的功能和参数要求：\n\n")
-
-	for i, tool := range llm.tools {
-		prompt.WriteString(fmt.Sprintf("### %d. %s\n\n", i+1, tool.Name))
-		prompt.WriteString(fmt.Sprintf("**描述**: %s\n\n", tool.Description))
-
-		// 格式化 InputSchema
-		if len(tool.InputSchema) > 0 {
-			prompt.WriteString("**参数要求**:\n")
-
-			// 反序列化 json.RawMessage 为 map
-			var schemaMap map[string]interface{}
-			if err := json.Unmarshal(tool.InputSchema, &schemaMap); err == nil {
-				// 提取 properties
-				if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
-					for paramName, paramDetails := range props {
-						if detailMap, ok := paramDetails.(map[string]interface{}); ok {
-							paramType := detailMap["type"]
-							paramDesc := detailMap["description"]
-							prompt.WriteString(fmt.Sprintf("  - `%s` (%v): %v\n", paramName, paramType, paramDesc))
-						}
-					}
-				}
-				// 提取 required 字段
-				if required, ok := schemaMap["required"].([]interface{}); ok && len(required) > 0 {
-					prompt.WriteString(fmt.Sprintf("  - **必需参数**: %v\n", required))
-				}
-			} else {
-				// 如果解析失败，记录原始 Schema
-				logger.Debug("[RuleBasedLLM] Failed to parse InputSchema",
-					logger.String("tool", tool.Name),
-					logger.Err(err))
-			}
-			prompt.WriteString("\n")
-		}
-	}
-
-	return prompt.String()
-}
-
-// min 返回两个整数中的较小值
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// MakeDecision 根据当前状态做出决策
-func (llm *RuleBasedLLM) MakeDecision(ctx context.Context, state *State) (Decision, error) {
-	logger.Debug("[RuleBasedLLM] Making decision", logger.Int("iteration", state.IterationCount))
-
-	// 按优先级排序规则（从小到大）
-	sortedRules := make([]DecisionRule, len(llm.rules))
-	copy(sortedRules, llm.rules)
-
-	// 简单的冒泡排序
-	for i := 0; i < len(sortedRules); i++ {
-		for j := i + 1; j < len(sortedRules); j++ {
-			if sortedRules[i].Priority > sortedRules[j].Priority {
-				sortedRules[i], sortedRules[j] = sortedRules[j], sortedRules[i]
-			}
-		}
-	}
-
-	// 按优先级匹配规则
-	for _, rule := range sortedRules {
-		if rule.Condition(state) {
-			logger.Debug("[RuleBasedLLM] Rule matched", logger.String("rule", rule.Name), logger.String("decision", string(rule.Action)))
-			return rule.Action, nil
-		}
-	}
-
-	// 默认决策
-	logger.Debug("[RuleBasedLLM] No rule matched, using default decision")
-	return DecisionDeepQuery, nil
-}
-
-// Analyze 分析 K8s 信息
-func (llm *RuleBasedLLM) Analyze(ctx context.Context, state *State) (string, error) {
-	logger.Debug("[RuleBasedLLM] Analyzing K8s information")
-
-	var analysis strings.Builder
-
-	// 分析 Pod 状态
-	if len(state.K8sInfo.Pods) > 0 {
-		analysis.WriteString("## Pod 状态分析\n\n")
-		runningCount := 0
-		errorCount := 0
-		pendingCount := 0
-
-		for _, pod := range state.K8sInfo.Pods {
-			switch pod.Status {
-			case "Running":
-				runningCount++
-			case "Error", "CrashLoopBackOff":
-				errorCount++
-			case "Pending":
-				pendingCount++
-			}
-		}
-
-		analysis.WriteString(fmt.Sprintf("- 总 Pod 数: %d\n", len(state.K8sInfo.Pods)))
-		analysis.WriteString(fmt.Sprintf("- 运行中: %d\n", runningCount))
-		analysis.WriteString(fmt.Sprintf("- 错误: %d\n", errorCount))
-		analysis.WriteString(fmt.Sprintf("- 等待中: %d\n\n", pendingCount))
-
-		if errorCount > 0 {
-			analysis.WriteString("⚠️ 发现异常 Pod，建议查看日志\n\n")
-		}
-	}
-
-	// 分析事件
-	if len(state.K8sInfo.Events) > 0 {
-		analysis.WriteString("## 事件分析\n\n")
-		warningCount := 0
-
-		for _, event := range state.K8sInfo.Events {
-			if event.Type == "Warning" {
-				warningCount++
-			}
-		}
-
-		analysis.WriteString(fmt.Sprintf("- 总事件数: %d\n", len(state.K8sInfo.Events)))
-		analysis.WriteString(fmt.Sprintf("- 警告事件: %d\n\n", warningCount))
-
-		if warningCount > 0 {
-			analysis.WriteString("⚠️ 发现警告事件，建议关注\n\n")
-		}
-	}
-
-	// 分析网络
-	if state.K8sInfo.NetworkInfo != nil && len(state.K8sInfo.NetworkInfo.Connectivity) > 0 {
-		analysis.WriteString("## 网络分析\n\n")
-		successCount := 0
-		for _, conn := range state.K8sInfo.NetworkInfo.Connectivity {
-			if conn.Success {
-				successCount++
-			}
-		}
-
-		analysis.WriteString(fmt.Sprintf("- 总连接测试: %d\n", len(state.K8sInfo.NetworkInfo.Connectivity)))
-		analysis.WriteString(fmt.Sprintf("- 成功: %d\n", successCount))
-		analysis.WriteString(fmt.Sprintf("- 失败: %d\n\n", len(state.K8sInfo.NetworkInfo.Connectivity)-successCount))
-
-		if successCount < len(state.K8sInfo.NetworkInfo.Connectivity) {
-			analysis.WriteString("⚠️ 发现网络连接问题\n\n")
-		}
-	}
-
-	return analysis.String(), nil
-}
-
-// GenerateReport 生成报告摘要
-func (llm *RuleBasedLLM) GenerateReport(ctx context.Context, state *State) (string, error) {
-	logger.Debug("[RuleBasedLLM] Generating report summary")
-
-	var summary strings.Builder
-
-	summary.WriteString("## 分析摘要\n\n")
-	summary.WriteString(fmt.Sprintf("**用户查询**: %s\n\n", state.UserInput))
-	summary.WriteString(fmt.Sprintf("**命名空间**: %s\n\n", state.K8sInfo.Namespace))
-	summary.WriteString(fmt.Sprintf("**迭代次数**: %d/%d\n\n", state.IterationCount, state.MaxIterations))
-
-	// 统计信息
-	summary.WriteString("### 统计信息\n\n")
-	summary.WriteString(fmt.Sprintf("- Pod 数量: %d\n", len(state.K8sInfo.Pods)))
-	summary.WriteString(fmt.Sprintf("- Service 数量: %d\n", len(state.K8sInfo.Services)))
-	summary.WriteString(fmt.Sprintf("- Deployment 数量: %d\n", len(state.K8sInfo.Deployments)))
-	summary.WriteString(fmt.Sprintf("- 事件数量: %d\n", len(state.K8sInfo.Events)))
-	summary.WriteString(fmt.Sprintf("- 日志条目: %d\n", len(state.K8sInfo.Logs)))
-	summary.WriteString(fmt.Sprintf("- 执行命令: %d\n\n", len(state.AnalysisResult.ExecutedCommands)))
-
-	// 状态
-	summary.WriteString("### 分析状态\n\n")
-	switch state.AnalysisResult.Status {
-	case StatusCompleted:
-		summary.WriteString("✅ 分析完成\n\n")
-	case StatusPartial:
-		summary.WriteString("⚠️ 部分完成（达到最大迭代次数）\n\n")
-	case StatusFailed:
-		summary.WriteString("❌ 分析失败\n\n")
-	default:
-		summary.WriteString("🔄 分析进行中\n\n")
-	}
-
-	return summary.String(), nil
+	// AnalyzeError 针对特定错误上下文进行深入分析
+	// 使用此方法可以获取更具体的修复建议
+	// 当启用真实 LLM 时，使用 Eino Chain 进行分析
+	AnalyzeError(ctx context.Context, errorContext ErrorContext) (AnalysisResult, error)
 }
 
 // MockLLM 模拟 LLM 实现
@@ -521,6 +152,32 @@ func (m *MockLLM) SetTools(tools []client.Tool) {
 	logger.Debug("[MockLLM] Tools set", logger.Int("count", len(tools)))
 }
 
+// AnalyzeError 模拟错误分析
+func (m *MockLLM) AnalyzeError(ctx context.Context, errorContext ErrorContext) (AnalysisResult, error) {
+	logger.Debug("[MockLLM] Analyzing error",
+		logger.String("pod", errorContext.PodName),
+		logger.String("status", errorContext.Status))
+
+	var result AnalysisResult
+
+	// 模拟分析结果
+	result.Findings = append(result.Findings, Finding{
+		Severity:  "High",
+		Resource:  errorContext.PodName,
+		Message:   fmt.Sprintf("模拟分析: Pod 状态异常 - %s", errorContext.Status),
+		Timestamp: time.Now(),
+	})
+
+	result.Recommendations = append(result.Recommendations, Recommendation{
+		Action:   "模拟修复建议",
+		Reason:   "这是一个模拟的分析结果",
+		Priority: "Medium",
+		Command:  "",
+	})
+
+	return result, nil
+}
+
 // CommandGenerator 命令生成器
 // 根据当前状态生成要执行的命令
 type CommandGenerator struct{}
@@ -532,6 +189,28 @@ type ToolCall struct {
 	Args    map[string]interface{} `json:"args"`    // 工具参数
 	Type    string                 `json:"type"`    // 调用类型："k8s" 或 "shell"
 	Command string                 `json:"command"` // 原始命令字符串（用于兼容和日志）
+}
+
+// ErrorContext 错误上下文结构
+// 用于传递错误 Pod 的详细信息给 LLM 进行深入分析
+type ErrorContext struct {
+	// PodName Pod 名称
+	PodName string
+
+	// Namespace 命名空间
+	Namespace string
+
+	// Status Pod 状态
+	Status string
+
+	// Restarts 重启次数
+	Restarts int32
+
+	// Logs Pod 日志内容
+	Logs string
+
+	// Events 相关事件列表
+	Events []string
 }
 
 // NewCommandGenerator 创建命令生成器

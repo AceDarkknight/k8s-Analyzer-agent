@@ -29,26 +29,48 @@ type Agent struct {
 	k8sClient   K8sClient
 	safetyAgent SafetyAgent
 	llm         LLM
+	reactLLM    *ReActLLM     // ReAct LLM 用于错误分析
 	tools       []client.Tool // 动态加载的工具列表
+	store       FindingStore  // Finding 存储（去重）
 }
 
 // NewAgent 创建新的 Analysis Agent
 func NewAgent(k8sClient K8sClient, safetyAgent SafetyAgent, llmConfig *config.LLMConfig) (*Agent, error) {
-	// 创建基于规则的 LLM（传入配置）
-	llm := NewRuleBasedLLM(llmConfig)
+	// 初始化 FindingStore（Redis 优先，失败则回退到内存存储）
+	store := initFindingStore(llmConfig)
+
+	// 必须创建 ReActLLM，不再降级
+	if llmConfig.Provider == "rule-based" || llmConfig.APIKey == "" {
+		logger.Fatal("[Agent] ReActLLM requires valid LLM configuration (provider != 'rule-based' and APIKey provided)")
+		return nil, fmt.Errorf("invalid LLM configuration: rule-based provider or missing APIKey not supported")
+	}
 
 	agent := &Agent{
 		k8sClient:   k8sClient,
 		safetyAgent: safetyAgent,
-		llm:         llm,
+		store:       store,
 	}
 
 	// 加载工具列表（严格启动检查）
+	// 注意：这里先不设置 LLM，LoadTools 中需要用到 llm，先创建一个 MockLLM 临时使用
+	agent.llm = NewMockLLM()
+
 	ctx := context.Background()
 	if err := agent.LoadTools(ctx); err != nil {
 		logger.Fatal("Failed to load tools during agent initialization", logger.Err(err))
 		return nil, fmt.Errorf("failed to load tools: %w", err)
 	}
+
+	logger.Info("[Agent] Creating ReAct LLM for dynamic tool calling")
+	reactLLM, err := NewReActLLM(ctx, k8sClient, safetyAgent, llmConfig)
+	if err != nil {
+		logger.Fatal("[Agent] Failed to create ReAct LLM, exiting",
+			logger.Err(err))
+		return nil, fmt.Errorf("failed to create ReAct LLM: %w", err)
+	}
+	agent.reactLLM = reactLLM
+	agent.llm = reactLLM // 使用 ReActLLM 替换临时 MockLLM
+	logger.Info("[Agent] ReAct LLM created successfully")
 
 	// 构建 Graph
 	if err := agent.buildGraph(); err != nil {
@@ -60,11 +82,12 @@ func NewAgent(k8sClient K8sClient, safetyAgent SafetyAgent, llmConfig *config.LL
 }
 
 // NewAgentWithLLM 使用自定义 LLM 创建 Agent
-func NewAgentWithLLM(k8sClient K8sClient, safetyAgent SafetyAgent, llm LLM) (*Agent, error) {
+func NewAgentWithLLM(k8sClient K8sClient, safetyAgent SafetyAgent, llm LLM, store FindingStore) (*Agent, error) {
 	agent := &Agent{
 		k8sClient:   k8sClient,
 		safetyAgent: safetyAgent,
 		llm:         llm,
+		store:       store,
 	}
 
 	// 加载工具列表（严格启动检查）
@@ -81,6 +104,55 @@ func NewAgentWithLLM(k8sClient K8sClient, safetyAgent SafetyAgent, llm LLM) (*Ag
 
 	logger.Info("Analysis Agent initialized successfully")
 	return agent, nil
+}
+
+// NewAgentWithReActLLM 使用 ReAct LLM 创建 Agent
+func NewAgentWithReActLLM(k8sClient K8sClient, safetyAgent SafetyAgent, reactLLM *ReActLLM, store FindingStore) (*Agent, error) {
+	// ReActLLM 已实现 LLM 接口，无需额外的基础 LLM
+	agent := &Agent{
+		k8sClient:   k8sClient,
+		safetyAgent: safetyAgent,
+		llm:         reactLLM, // 直接使用 ReActLLM 作为 LLM（实现 LLM 接口）
+		reactLLM:    reactLLM,
+		store:       store,
+	}
+
+	// 加载工具列表（严格启动检查）
+	ctx := context.Background()
+	if err := agent.LoadTools(ctx); err != nil {
+		logger.Fatal("Failed to load tools during agent initialization", logger.Err(err))
+		return nil, fmt.Errorf("failed to load tools: %w", err)
+	}
+
+	// 构建 Graph
+	if err := agent.buildGraph(); err != nil {
+		return nil, fmt.Errorf("failed to build graph: %w", err)
+	}
+
+	logger.Info("Analysis Agent initialized successfully with ReAct LLM")
+	return agent, nil
+}
+
+// initFindingStore 初始化 FindingStore
+// Redis 优先，失败则回退到内存存储
+func initFindingStore(cfg *config.LLMConfig) FindingStore {
+	// 检查是否配置了 Redis
+	if cfg != nil && cfg.Redis != nil && cfg.Redis.IsValid() {
+		logger.Info("Initializing Redis store for findings",
+			logger.String("host", cfg.Redis.Host),
+			logger.Int("port", cfg.Redis.Port))
+
+		store, err := NewRedisStore(cfg.Redis)
+		if err != nil {
+			logger.Warn("Failed to connect to Redis, falling back to in-memory store",
+				logger.Err(err))
+			return NewMemoryStore()
+		}
+		return store
+	}
+
+	logger.Warn("Redis not configured, using in-memory store for findings")
+	return NewMemoryStore()
 }
 
 // LoadTools 加载 K8s MCP Server 的工具列表
@@ -137,11 +209,19 @@ func (a *Agent) buildGraph() error {
 	// 创建 Graph
 	g := compose.NewGraph[*State, *AnalysisResult]()
 
+	// 确定使用哪个 LLM 进行错误分析
+	// 优先使用 ReActLLM，如果可用的话
+	errorAnalysisLLM := a.llm
+	if a.reactLLM != nil {
+		logger.Info("[Agent] Using ReAct LLM for error analysis")
+		errorAnalysisLLM = a.reactLLM
+	}
+
 	// 创建节点
 	infoNode := NewInfoNode(a.k8sClient)
 	decisionNode := NewDecisionNode(a.llm)
 	actionNode := NewActionNode(a.safetyAgent, a.k8sClient)
-	reportNode := NewReportNode()
+	reportNode := NewReportNode(a.store, errorAnalysisLLM)
 	commandGenerator := NewCommandGenerator()
 
 	// 添加 Info 节点
@@ -267,7 +347,7 @@ func (a *Agent) buildGraph() error {
 	}
 
 	// 编译 Graph
-	compiledGraph, err := g.Compile(context.Background(), compose.WithMaxRunSteps(10))
+	compiledGraph, err := g.Compile(context.Background(), compose.WithMaxRunSteps(100))
 	if err != nil {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}
@@ -335,4 +415,9 @@ func (a *Agent) GetLLM() LLM {
 func (a *Agent) SetLLM(llm LLM) {
 	a.llm = llm
 	logger.Info("LLM updated")
+}
+
+// GetReActLLM 获取 ReAct LLM
+func (a *Agent) GetReActLLM() *ReActLLM {
+	return a.reactLLM
 }

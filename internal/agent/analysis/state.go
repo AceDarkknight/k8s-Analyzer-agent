@@ -132,35 +132,35 @@ type ConnectivityInfo struct {
 // AnalysisResult 分析结果
 type AnalysisResult struct {
 	// Summary 分析摘要
-	Summary string
+	Summary string `json:"summary"`
 
 	// Findings 发现的问题列表
-	Findings []Finding
+	Findings []Finding `json:"findings"`
 
 	// Recommendations 建议列表
-	Recommendations []Recommendation
+	Recommendations []Recommendation `json:"recommendations"`
 
 	// ExecutedCommands 已执行的命令列表
-	ExecutedCommands []CommandExecution
+	ExecutedCommands []CommandExecution `json:"executed_commands"`
 
 	// Status 分析状态
-	Status AnalysisStatus
+	Status AnalysisStatus `json:"status"`
 }
 
 // Finding 发现的问题
 type Finding struct {
-	Severity  string // Critical, High, Medium, Low, Info
-	Resource  string
-	Message   string
-	Timestamp time.Time
+	Severity  string    `json:"severity"` // Critical, High, Medium, Low, Info
+	Resource  string    `json:"resource"`
+	Message   string    `json:"message"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // Recommendation 建议
 type Recommendation struct {
-	Action   string
-	Reason   string
-	Priority string
-	Command  string // 可选的修复命令
+	Action   string `json:"action"`
+	Reason   string `json:"reason"`
+	Priority string `json:"priority"`
+	Command  string `json:"command"` // 可选的修复命令
 }
 
 // CommandExecution 命令执行记录

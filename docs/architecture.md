@@ -76,6 +76,14 @@ graph TD
 - **K8s MCP Client**: 负责与 `k8s-mcp` Server 通信，集成 `github.com/AceDarkknight/k8s-mcp` 客户端库，封装资源查询接口。
 - **Shell Executor MCP Client**: 负责与 `shell-executor-mcp` Server 通信，集成 `github.com/AceDarkknight/shell-executor-mcp` 相关实现，发送经清洗后的安全命令。
 
+#### 2.2.4 Finding Store (Issue De-duplication)
+- **角色**：问题存储与去重组件。
+- **职责**：
+    - **持久化存储**：支持内存（Memory）和 Redis 两种存储后端，用于保存已发现的问题（Finding）。
+    - **智能去重**：通过唯一的 Finding Key（如 `cluster:ns:pod:issue_type`）识别重复问题，避免在连续分析周期中产生冗余报警。
+    - **状态管理**：结合 TTL（Time To Live）机制，自动清理过期的历史问题，确保存储空间的有效利用。
+- **配置**：通过 `LLMConfig.Redis` 配置项指定 Redis 连接信息（Host, Port, Password, DB）。若未配置，则默认使用内存存储。
+
 ## 3. 交互流程设计
 
 ### 3.1 时序图
@@ -183,6 +191,11 @@ type MCPClient interface {
 *   **K8s Info Node**: 调用 `k8s-mcp` 获取集群/资源基本信息。
 *   **Analysis Node**: 利用 LLM 分析收集到的数据，决定下一步行动（跳转到日志节点、Shell 节点或输出结论）。
 *   **Tool Execution Node**: 执行具体的 MCP 工具（如 `execute_command`）。
+*   **Report Node**: 负责最终的分析聚合与报告生成。新版工作流引入了 FindingStore 和 LLM 深度分析：
+    1.  **Filter Unhealthy**: 遍历收集到的资源状态，筛选出异常对象（如 CrashLoopBackOff 的 Pod）。
+    2.  **Check Store**: 查询 FindingStore，检查该异常是否已被记录且未过期。若存在，则跳过以实现去重。
+    3.  **LLM Analysis**: 针对新发现的异常，提取相关日志和事件构建 `ErrorContext`，调用 LLM 进行根因分析（Root Cause Analysis）。
+    4.  **Save Finding**: 将 LLM 分析生成的结构化 Finding 保存至 Store，并添加到最终报告中。
 
 ### 4.3 动态工具发现与 LLM 集成 (Dynamic Tool Discovery & LLM Integration)
 
@@ -198,6 +211,9 @@ type MCPClient interface {
 
 **LLM 集成更新**:
 *   **动态提示词**: LLM 的 Prompt 不再包含硬编码的工具列表。相反，它会在运行时根据 `ListTools` 的结果构建工具描述部分。这确保了 LLM 总是知道当前环境确切支持哪些操作。
+*   **FormatToolsPrompt**: 系统实现了 `FormatToolsPrompt` 方法，能够将动态获取的工具列表（包括名称、描述、Schema）格式化为 LLM 可理解的 Markdown 文本，并注入到 System Prompt 中。这种上下文感知（Context Awareness）能力显著提升了 LLM 工具调用的准确性。
+*   **Error Analysis**: 新增 `AnalyzeError` 方法，允许 ReportNode 针对特定错误上下文（如 Pod 日志、事件）进行深度分析，并返回结构化的 Finding 和 Recommendation。
+*   **并发分析**: ReportNode 在分析多个异常 Pod 时，使用并发机制（受限于信号量）并行调用 LLM，以提高报告生成效率。
 
 ## 5. 接口设计
 

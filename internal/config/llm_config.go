@@ -21,6 +21,9 @@ type LLMConfig struct {
 
 	// MaxTokens 最大 Token 数
 	MaxTokens int `json:"max_tokens"`
+
+	// Redis Redis 配置（可选）
+	Redis *RedisConfig `json:"redis"`
 }
 
 // AgentLLMConfig 定义所有 Agent 的 LLM 配置

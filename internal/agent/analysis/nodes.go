@@ -1,10 +1,12 @@
 // Package analysis 提供 Graph 节点实现
+// Package analysis 提供 Graph 节点实现
 package analysis
 
 import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
@@ -589,11 +591,29 @@ func (n *ActionNode) parseCommandOutput(state *State, command, output string) {
 // ReportNode 报告生成节点
 // 汇总信息生成最终报告
 type ReportNode struct {
+	store FindingStore // Finding 存储（去重）
+	llm   LLM          // LLM（用于深入分析）
 }
 
 // NewReportNode 创建新的 ReportNode
-func NewReportNode() *ReportNode {
-	return &ReportNode{}
+// store: Finding 存储实例，用于去重
+// llm: LLM 实例，用于深入分析
+func NewReportNode(store FindingStore, llm LLM) *ReportNode {
+	return &ReportNode{
+		store: store,
+		llm:   llm,
+	}
+}
+
+// saveFinding 保存 Finding 记录到 Store
+// 封装了 TTL 获取和错误处理逻辑
+func (n *ReportNode) saveFinding(ctx context.Context, key string) {
+	if n.store != nil {
+		defaultTTL := time.Hour
+		if err := n.store.SaveFinding(ctx, key, defaultTTL); err != nil {
+			logger.Warn("[ReportNode] Failed to save finding", logger.Err(err))
+		}
+	}
 }
 
 // Execute 生成报告
@@ -603,8 +623,8 @@ func (n *ReportNode) Execute(ctx context.Context, state *State) (*State, error) 
 	// 生成摘要
 	state.AnalysisResult.Summary = n.generateSummary(state)
 
-	// 分析发现的问题
-	n.analyzeFindings(state)
+	// 分析发现的问题（传递 ctx 用于去重）
+	n.analyzeFindings(ctx, state)
 
 	// 生成建议
 	n.generateRecommendations(state)
@@ -639,28 +659,175 @@ func (n *ReportNode) generateSummary(state *State) string {
 }
 
 // analyzeFindings 分析发现的问题
-func (n *ReportNode) analyzeFindings(state *State) {
-	// 检查 Pod 状态
+// 使用并发处理来并行分析多个 Pod 的错误
+func (n *ReportNode) analyzeFindings(ctx context.Context, state *State) {
+	// 收集需要 LLM 分析的错误 Pod
+	type pendingAnalysis struct {
+		key          string
+		pod          PodInfo
+		errorContext ErrorContext
+	}
+
+	var pendingAnalyses []pendingAnalysis
+
+	// 检查 Pod 状态并收集需要分析的错误
 	for _, pod := range state.K8sInfo.Pods {
 		switch pod.Status {
-		case "Error", "CrashLoopBackOff":
-			state.AddFinding("Critical", pod.Name, fmt.Sprintf("Pod 状态异常: %s", pod.Status))
+		case "Error":
+			// 生成唯一的 Finding key
+			key := fmt.Sprintf("finding:%s:%s:%s", state.K8sInfo.Namespace, pod.Name, pod.Status)
+			// 检查是否已存在
+			if n.store != nil {
+				has, err := n.store.HasFinding(ctx, key)
+				if err != nil {
+					logger.Warn("[ReportNode] Failed to check finding", logger.Err(err))
+				}
+				if has {
+					logger.Info("[ReportNode] Skipping duplicate finding", logger.String("key", key))
+					continue
+				}
+			}
+
+			// 收集待分析的错误
+			pendingAnalyses = append(pendingAnalyses, pendingAnalysis{
+				key: key,
+				pod: pod,
+				errorContext: ErrorContext{
+					PodName:   pod.Name,
+					Namespace: pod.Namespace,
+					Status:    pod.Status,
+					Restarts:  pod.Restarts,
+					Logs:      n.extractPodLogs(state, pod.Name),
+					Events:    n.extractPodEvents(state, pod.Name),
+				},
+			})
+
 		case "Pending":
+			key := fmt.Sprintf("finding:%s:%s:%s", state.K8sInfo.Namespace, pod.Name, "Pending")
+			if n.store != nil {
+				has, err := n.store.HasFinding(ctx, key)
+				if err != nil {
+					logger.Warn("[ReportNode] Failed to check finding", logger.Err(err))
+				}
+				if has {
+					logger.Info("[ReportNode] Skipping duplicate finding", logger.String("key", key))
+					continue
+				}
+			}
 			state.AddFinding("Medium", pod.Name, "Pod 处于 Pending 状态")
+			n.saveFinding(ctx, key)
 		}
+
 		if pod.Restarts > 3 {
+			key := fmt.Sprintf("finding:%s:%s:high_restarts", state.K8sInfo.Namespace, pod.Name)
+			if n.store != nil {
+				has, err := n.store.HasFinding(ctx, key)
+				if err != nil {
+					logger.Warn("[ReportNode] Failed to check finding", logger.Err(err))
+				}
+				if has {
+					logger.Info("[ReportNode] Skipping duplicate finding", logger.String("key", key))
+					continue
+				}
+			}
 			state.AddFinding("High", pod.Name, fmt.Sprintf("Pod 重启次数过多: %d", pod.Restarts))
+			n.saveFinding(ctx, key)
+		}
+	}
+
+	// 并发执行 LLM 分析，使用 semaphore 限制并发数
+	if len(pendingAnalyses) > 0 && n.llm != nil {
+		logger.Info("[ReportNode] Starting concurrent LLM analysis",
+			logger.Int("count", len(pendingAnalyses)))
+
+		// 使用 WaitGroup 和 Mutex 实现并发分析
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+
+		// 限制并发数为 1
+		semaphore := make(chan struct{}, 1)
+
+		for _, analysis := range pendingAnalyses {
+			wg.Add(1)
+			go func(a pendingAnalysis) {
+				defer wg.Done()
+
+				// 获取信号量
+				// 使用 select 允许在 ctx 被取消时退出等待
+				select {
+				case semaphore <- struct{}{}:
+				case <-ctx.Done():
+					logger.Info("[ReportNode] Context cancelled, skipping analysis", logger.String("pod", a.pod.Name))
+					return
+				}
+
+				// 确保释放信号量
+				defer func() { <-semaphore }()
+
+				// 再次检查 ctx 是否已取消（可选，但在高并发下有助于提前退出）
+				select {
+				case <-ctx.Done():
+					logger.Info("[ReportNode] Context cancelled before analysis", logger.String("pod", a.pod.Name))
+					return
+				default:
+				}
+
+				// 调用 LLM 进行深入分析
+				analysisResult, err := n.llm.AnalyzeError(ctx, a.errorContext)
+				mu.Lock()
+				defer mu.Unlock()
+
+				if err != nil {
+					logger.Fatal("[ReportNode] LLM analysis failed, exiting program",
+						logger.Err(err),
+						logger.String("pod", a.pod.Name))
+					return
+				} else {
+					// 添加 LLM 分析结果
+					for _, finding := range analysisResult.Findings {
+						state.AddFinding(finding.Severity, finding.Resource, finding.Message)
+					}
+					for _, rec := range analysisResult.Recommendations {
+						state.AddRecommendation(rec.Action, rec.Reason, rec.Priority, rec.Command)
+					}
+				}
+
+				// 保存到 store
+				n.saveFinding(ctx, a.key)
+			}(analysis)
+		}
+
+		// 等待所有分析完成
+		wg.Wait()
+		logger.Info("[ReportNode] Completed concurrent LLM analysis")
+	} else if len(pendingAnalyses) > 0 {
+		// 没有 LLM，直接添加简单的 Finding
+		for _, analysis := range pendingAnalyses {
+			state.AddFinding("Critical", analysis.pod.Name, fmt.Sprintf("Pod 状态异常: %s", analysis.pod.Status))
+			n.saveFinding(ctx, analysis.key)
 		}
 	}
 
 	// 检查事件
 	for _, event := range state.K8sInfo.Events {
 		if event.Type == "Warning" {
+			key := fmt.Sprintf("finding:%s:event:%s", state.K8sInfo.Namespace, event.Reason)
+			if n.store != nil {
+				has, err := n.store.HasFinding(ctx, key)
+				if err != nil {
+					logger.Warn("[ReportNode] Failed to check finding", logger.Err(err))
+				}
+				if has {
+					logger.Info("[ReportNode] Skipping duplicate finding", logger.String("key", key))
+					continue
+				}
+			}
 			severity := "Medium"
 			if strings.Contains(event.Reason, "Failed") || strings.Contains(event.Reason, "Error") {
 				severity = "High"
 			}
 			state.AddFinding(severity, event.Component, fmt.Sprintf("%s: %s", event.Reason, event.Message))
+			n.saveFinding(ctx, key)
 		}
 	}
 
@@ -668,10 +835,43 @@ func (n *ReportNode) analyzeFindings(state *State) {
 	if state.K8sInfo.NetworkInfo != nil {
 		for _, conn := range state.K8sInfo.NetworkInfo.Connectivity {
 			if !conn.Success {
+				key := fmt.Sprintf("finding:network:%s:%s", conn.Source, conn.Target)
+				if n.store != nil {
+					has, err := n.store.HasFinding(ctx, key)
+					if err != nil {
+						logger.Warn("[ReportNode] Failed to check finding", logger.Err(err))
+					}
+					if has {
+						logger.Info("[ReportNode] Skipping duplicate finding", logger.String("key", key))
+						continue
+					}
+				}
 				state.AddFinding("High", "Network", fmt.Sprintf("网络连接失败: %s", conn.Output))
+				n.saveFinding(ctx, key)
 			}
 		}
 	}
+}
+
+// extractPodLogs 提取 Pod 的日志
+func (n *ReportNode) extractPodLogs(state *State, podName string) string {
+	for _, log := range state.K8sInfo.Logs {
+		if log.PodName == podName {
+			return log.Message
+		}
+	}
+	return ""
+}
+
+// extractPodEvents 提取 Pod 相关的事件
+func (n *ReportNode) extractPodEvents(state *State, podName string) []string {
+	var events []string
+	for _, event := range state.K8sInfo.Events {
+		if strings.Contains(event.Message, podName) {
+			events = append(events, fmt.Sprintf("[%s] %s: %s", event.Type, event.Reason, event.Message))
+		}
+	}
+	return events
 }
 
 // generateRecommendations 生成建议

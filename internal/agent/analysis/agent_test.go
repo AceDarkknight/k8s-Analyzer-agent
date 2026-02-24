@@ -42,9 +42,9 @@ func (m *MockSafetyAgent) GetCommands() []string {
 // getTestLLMConfig 返回测试用的 LLM 配置
 func getTestLLMConfig() *config.LLMConfig {
 	return &config.LLMConfig{
-		Provider:    "rule-based",
-		BaseURL:     "",
-		APIKey:      "",
+		Provider:    "openai",
+		BaseURL:     "https://api.openai.com/v1",
+		APIKey:      "test-api-key", // 使用测试 API Key
 		Model:       "gpt-4",
 		Temperature: 0.7,
 		MaxTokens:   2000,
@@ -242,42 +242,6 @@ func TestAddRecommendation(t *testing.T) {
 
 	if rec.Priority != "High" {
 		t.Errorf("Expected priority 'High', got '%s'", rec.Priority)
-	}
-}
-
-// TestRuleBasedLLM 测试基于规则的 LLM
-func TestRuleBasedLLM(t *testing.T) {
-	llm := NewRuleBasedLLM(getTestLLMConfig())
-
-	// 测试达到最大迭代次数
-	state := NewState("test")
-	state.IterationCount = 10
-
-	decision, err := llm.MakeDecision(context.Background(), state)
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-
-	if decision != DecisionReport {
-		t.Errorf("Expected decision '%s', got '%s'", DecisionReport, decision)
-	}
-
-	// 测试有错误 Pod 的情况
-	state = NewState("test")
-	state.K8sInfo.Pods = []PodInfo{
-		{
-			Name:   "error-pod",
-			Status: "Error",
-		},
-	}
-
-	decision, err = llm.MakeDecision(context.Background(), state)
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-
-	if decision != DecisionDeepQuery {
-		t.Errorf("Expected decision '%s', got '%s'", DecisionDeepQuery, decision)
 	}
 }
 
