@@ -25,6 +25,11 @@ type FindingStore interface {
 	// ttl: 过期时间
 	SaveFinding(ctx context.Context, key string, ttl time.Duration) error
 
+	// DeleteFinding 删除指定的 Finding 记录
+	// key: 唯一标识符
+	// 返回错误如果删除失败
+	DeleteFinding(ctx context.Context, key string) error
+
 	// Close 关闭存储连接
 	Close() error
 }
@@ -71,6 +76,20 @@ func (s *MemoryStore) SaveFinding(ctx context.Context, key string, ttl time.Dura
 // Close 关闭存储连接
 func (s *MemoryStore) Close() error {
 	s.cache.Stop()
+	return nil
+}
+
+// DeleteFinding 删除指定的 Finding 记录
+func (s *MemoryStore) DeleteFinding(ctx context.Context, key string) error {
+	// 检查 key 是否存在
+	item := s.cache.Get(key)
+	if item != nil {
+		// 存在则删除
+		s.cache.Delete(key)
+		logger.Debug("[MemoryStore] Deleted finding", logger.String("key", key))
+	} else {
+		logger.Debug("[MemoryStore] Key not found for deletion", logger.String("key", key))
+	}
 	return nil
 }
 
@@ -132,6 +151,18 @@ func (s *RedisStore) SaveFinding(ctx context.Context, key string, ttl time.Durat
 		return err
 	}
 	logger.Debug("[RedisStore] Saved finding", logger.String("key", key), logger.String("ttl", ttl.String()))
+	return nil
+}
+
+// DeleteFinding 删除指定的 Finding 记录
+func (s *RedisStore) DeleteFinding(ctx context.Context, key string) error {
+	// 使用 DEL 命令删除指定的 key
+	err := s.client.Del(ctx, key).Err()
+	if err != nil {
+		logger.Error("[RedisStore] Failed to delete finding", logger.Err(err), logger.String("key", key))
+		return err
+	}
+	logger.Debug("[RedisStore] Deleted finding", logger.String("key", key))
 	return nil
 }
 

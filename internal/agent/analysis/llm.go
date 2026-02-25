@@ -19,18 +19,18 @@ const SystemPrompt = `## 系统角色
 
 ## 核心职责
 
-1. **全命名空间诊断**: 你必须诊断整个集群的所有命名空间，不要局限于单个命名空间。
-2. **全面分析**: 检查所有命名空间中的 Pod、Service、Deployment、Event 等资源。
-3. **问题发现**: 主动发现集群中的异常状态，如 CrashLoopBackOff、Pending、错误事件等。
+1. **全命名空間诊断**: 你必须诊断整个集群的所有命名空间，不要局限于单个命名空間。
+2. **全面分析**: 检查所有命名空间中的 Pod、Service、Deployment、StatefulSet、Event 等资源。
+3. **问题发现**: 主动发现集群中的异常状态，如 CrashLoopBackOff、Pending、Error、错误事件等。
 4. **根因分析**: 分析问题的根本原因并提供解决建议。
 
 ## ⚠️ 重要约束 - 必须严格遵守
 
 ### 数据使用约束（最高优先级）
 - **检查已有数据**: 在生成任何查询命令之前，必须先检查 Context 部分是否已包含所需数据。
-- **避免重复查询**: 如果 Context 中已有 Pod/Service/Deployment 列表，不要再次生成命令获取它们。
+- **避免重复查询**: 如果 Context 中已有 Pod/Deployment/StatefulSet 列表，不要再次生生成命的命令获取它们。
 - **直接分析**: 当已有足够数据时，直接进入分析阶段，生成 "report" 决策。
-- **数据充足判断**: 如果已收集到任何 Pod、Service 或 Event 数据，应优先分析这些数据而非继续收集。
+- **数据充足判断**: 如果已收集到任何 Pod 或 Event 数据，应优先分析这些数据而非继续收集。
 
 ### 工具使用约束
 - **禁止生成 shell 命令**: 绝对不要生成类似 'kubectl get pods' 的 shell 命令。
@@ -58,8 +58,8 @@ const SystemPrompt = `## 系统角色
 ### 步骤 3: 遍历每个命名空间收集资源
 对于步骤 2 返回的每个命名空间，依次调用：
 - 'list_pods'（参数: namespace=<命名空间名称>）
-- 'list_services'（参数: namespace=<命名空间名称>）
 - 'list_deployments'（参数: namespace=<命名空间名称>）
+- 'list_statefulsets'（参数: namespace=<命名空间名称>）
 - 'get_events'（参数: namespace=<命名空间名称>）
 
 ### 步骤 4: 分析问题
@@ -223,11 +223,9 @@ func NewCommandGenerator() *CommandGenerator {
 func (g *CommandGenerator) GenerateCommand(state *State) (*ToolCall, error) {
 	logger.Debug("[CommandGenerator] Generating command", logger.Int("iteration", state.IterationCount))
 
-	// 检查是否已有足够的 K8s 资源数据
+	// 检查是否已有足够的 K8s 资源数据（采用动态获取模式，不再预收集 Services 和 Events）
 	hasK8sResources := len(state.K8sInfo.Pods) > 0 ||
-		len(state.K8sInfo.Services) > 0 ||
-		len(state.K8sInfo.Deployments) > 0 ||
-		len(state.K8sInfo.Events) > 0
+		len(state.K8sInfo.Deployments) > 0
 
 	// 如果已有 K8s 资源数据，不再生成 kubectl 获取命令
 	// 只在有特定问题需要深入分析时生成命令
@@ -274,10 +272,6 @@ func (g *CommandGenerator) GenerateCommand(state *State) (*ToolCall, error) {
 				}
 			}
 		}
-
-		// 检查是否有 Service，尝试获取 Service 详细信息（如果需要）
-		// 注意：网络连通性测试目前仍使用 curl，我们暂时跳过这部分
-		// 后续可以添加类似 "check_service_connectivity" 的 K8s MCP 工具
 
 		// 已有数据且无特定问题需要深入分析，返回空命令表示无需更多操作
 		logger.Debug("[CommandGenerator] Already have K8s resources data, no need to fetch again")

@@ -93,9 +93,8 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 
 	// 步骤 2: 遍历每个命名空间收集资源
 	allPods := make([]PodInfo, 0)
-	allServices := make([]ServiceInfo, 0)
 	allDeployments := make([]DeploymentInfo, 0)
-	allEvents := make([]EventInfo, 0)
+	// allEvents := make([]EventInfo, 0)
 
 	for _, ns := range namespaces {
 		logger.Debug("[InfoNode] Collecting resources from namespace", logger.String("namespace", ns))
@@ -110,15 +109,15 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 			allPods = append(allPods, pods...)
 		}
 
-		// 收集 Service 信息
-		services, err := n.collectServices(ctx, ns)
-		if err != nil {
-			logger.Warn("[InfoNode] Failed to collect services from namespace",
-				logger.String("namespace", ns),
-				logger.Err(err))
-		} else {
-			allServices = append(allServices, services...)
-		}
+		// // 收集 Service 信息
+		// services, err := n.collectServices(ctx, ns)
+		// if err != nil {
+		// 	logger.Warn("[InfoNode] Failed to collect services from namespace",
+		// 		logger.String("namespace", ns),
+		// 		logger.Err(err))
+		// } else {
+		// 	allServices = append(allServices, services...)
+		// }
 
 		// 收集 Deployment 信息
 		deployments, err := n.collectDeployments(ctx, ns)
@@ -130,29 +129,30 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 			allDeployments = append(allDeployments, deployments...)
 		}
 
-		// 收集事件信息
-		events, err := n.collectEvents(ctx, ns)
-		if err != nil {
-			logger.Warn("[InfoNode] Failed to collect events from namespace",
-				logger.String("namespace", ns),
-				logger.Err(err))
-		} else {
-			allEvents = append(allEvents, events...)
-		}
+		// // 收集事件信息
+		// events, err := n.collectEvents(ctx, ns)
+		// if err != nil {
+		// 	logger.Warn("[InfoNode] Failed to collect events from namespace",
+		// 		logger.String("namespace", ns),
+		// 		logger.Err(err))
+		// } else {
+		// 	allEvents = append(allEvents, events...)
+		// }
 	}
 
 	// 更新状态
 	state.K8sInfo.Pods = allPods
-	state.K8sInfo.Services = allServices
+	// state.K8sInfo.Services = allServices
 	state.K8sInfo.Deployments = allDeployments
-	state.K8sInfo.Events = allEvents
+	// state.K8sInfo.Events = allEvents
 
 	logger.Info("[InfoNode] Collected information from all namespaces",
 		logger.Int("namespaces", len(namespaces)),
 		logger.Int("pods", len(allPods)),
-		logger.Int("services", len(allServices)),
+		// logger.Int("services", len(allServices)),
 		logger.Int("deployments", len(allDeployments)),
-		logger.Int("events", len(allEvents)))
+		// logger.Int("events", len(allEvents))
+	)
 
 	return state, nil
 }
@@ -263,40 +263,40 @@ func (n *InfoNode) collectPods(ctx context.Context, namespace string) ([]PodInfo
 	return pods, nil
 }
 
-// collectServices 收集 Service 信息
-func (n *InfoNode) collectServices(ctx context.Context, namespace string) ([]ServiceInfo, error) {
-	args := map[string]interface{}{
-		"namespace": namespace,
-	}
+//collectServices 收集 Service 信息
+//func (n *InfoNode) collectServices(ctx context.Context, namespace string) ([]ServiceInfo, error) {
+//	args := map[string]interface{}{
+//		"namespace": namespace,
+//	}
 
-	result, err := n.k8sClient.CallTool(ctx, "list_services", args)
-	if err != nil {
-		return nil, err
-	}
+//	result, err := n.k8sClient.CallTool(ctx, "list_services", args)
+//	if err != nil {
+//		return nil, err
+//	}
 
-	services := make([]ServiceInfo, 0)
-	if result != nil {
-		// 解析为 k8s-mcp 的 Service 类型切片
-		k8sServices, err := k8s.ParseToolResult[[]k8s.Service](result, "list_services")
-		if err != nil {
-			logger.Warn("[InfoNode] Failed to parse services result", logger.Err(err))
-			return services, nil
-		}
-		// 转换为内部 ServiceInfo 类型
-		for _, s := range k8sServices {
-			serviceInfo := ServiceInfo{
-				Name:      s.Name,
-				Namespace: s.Namespace,
-				Type:      s.Type,
-				ClusterIP: s.ClusterIP,
-			}
-			services = append(services, serviceInfo)
-		}
-	}
+//	services := make([]ServiceInfo, 0)
+//	if result != nil {
+//		// 解析为 k8s-mcp 的 Service 类型切片
+//		k8sServices, err := k8s.ParseToolResult[[]k8s.Service](result, "list_services")
+//		if err != nil {
+//			logger.Warn("[InfoNode] Failed to parse services result", logger.Err(err))
+//			return services, nil
+//		}
+//		// 转换为内部 ServiceInfo 类型
+//		for _, s := range k8sServices {
+//			serviceInfo := ServiceInfo{
+//				Name:      s.Name,
+//				Namespace: s.Namespace,
+//				Type:      s.Type,
+//				ClusterIP: s.ClusterIP,
+//			}
+//			services = append(services, serviceInfo)
+//		}
+//	}
 
-	logger.Debug("[InfoNode] Collected services from namespace", logger.String("namespace", namespace), logger.Int("count", len(services)))
-	return services, nil
-}
+//	logger.Debug("[InfoNode] Collected services from namespace", logger.String("namespace", namespace), logger.Int("count", len(services)))
+//	return services, nil
+//}
 
 // collectDeployments 收集 Deployment 信息
 func (n *InfoNode) collectDeployments(ctx context.Context, namespace string) ([]DeploymentInfo, error) {
@@ -340,41 +340,6 @@ func (n *InfoNode) collectDeployments(ctx context.Context, namespace string) ([]
 
 	logger.Debug("[InfoNode] Collected deployments from namespace", logger.String("namespace", namespace), logger.Int("count", len(deployments)))
 	return deployments, nil
-}
-
-// collectEvents 收集事件信息
-func (n *InfoNode) collectEvents(ctx context.Context, namespace string) ([]EventInfo, error) {
-	args := map[string]interface{}{
-		"namespace": namespace,
-	}
-
-	result, err := n.k8sClient.CallTool(ctx, "get_events", args)
-	if err != nil {
-		return nil, err
-	}
-
-	events := make([]EventInfo, 0)
-	if result != nil {
-		// 解析为 k8s-mcp 的 Event 类型切片
-		k8sEvents, err := k8s.ParseToolResult[[]k8s.Event](result, "get_events")
-		if err != nil {
-			logger.Warn("[InfoNode] Failed to parse events result", logger.Err(err))
-			return events, nil
-		}
-		// 转换为内部 EventInfo 类型
-		for _, e := range k8sEvents {
-			eventInfo := EventInfo{
-				Type:      e.Type,
-				Reason:    e.Reason,
-				Message:   e.Message,
-				Component: e.Source,
-			}
-			events = append(events, eventInfo)
-		}
-	}
-
-	logger.Debug("[InfoNode] Collected events from namespace", logger.String("namespace", namespace), logger.Int("count", len(events)))
-	return events, nil
 }
 
 // DecisionNode 决策节点
@@ -432,14 +397,6 @@ func (n *DecisionNode) fallbackDecision(state *State) Decision {
 		if pod.Restarts > 5 {
 			// Pod 重启次数过多
 			logger.Debug("[DecisionNode] Pod has many restarts", logger.String("pod", pod.Name), logger.Int32("restarts", pod.Restarts))
-			return DecisionDeepQuery
-		}
-	}
-
-	// 检查是否有事件
-	for _, event := range state.K8sInfo.Events {
-		if event.Type == "Warning" {
-			logger.Debug("[DecisionNode] Found warning event", logger.String("reason", event.Reason), logger.String("message", event.Message))
 			return DecisionDeepQuery
 		}
 	}
@@ -652,7 +609,6 @@ func (n *ReportNode) generateSummary(state *State) string {
 	sb.WriteString(fmt.Sprintf("**命名空间**: %s\n\n", state.K8sInfo.Namespace))
 	sb.WriteString(fmt.Sprintf("**迭代次数**: %d/%d\n\n", state.IterationCount, state.MaxIterations))
 	sb.WriteString(fmt.Sprintf("**收集的 Pod 数量**: %d\n\n", len(state.K8sInfo.Pods)))
-	sb.WriteString(fmt.Sprintf("**收集的 Service 数量**: %d\n\n", len(state.K8sInfo.Services)))
 	sb.WriteString(fmt.Sprintf("**执行的命令数量**: %d\n\n", len(state.AnalysisResult.ExecutedCommands)))
 
 	return sb.String()
@@ -730,7 +686,7 @@ func (n *ReportNode) analyzeFindings(ctx context.Context, state *State) {
 					continue
 				}
 			}
-			state.AddFinding("High", pod.Name, fmt.Sprintf("Pod 重启次数过多: %d", pod.Restarts))
+			state.AddFinding("Medium", pod.Name, fmt.Sprintf("Pod 重启次数过高: %d", pod.Restarts))
 			n.saveFinding(ctx, key)
 		}
 	}
@@ -808,29 +764,6 @@ func (n *ReportNode) analyzeFindings(ctx context.Context, state *State) {
 		}
 	}
 
-	// 检查事件
-	for _, event := range state.K8sInfo.Events {
-		if event.Type == "Warning" {
-			key := fmt.Sprintf("finding:%s:event:%s", state.K8sInfo.Namespace, event.Reason)
-			if n.store != nil {
-				has, err := n.store.HasFinding(ctx, key)
-				if err != nil {
-					logger.Warn("[ReportNode] Failed to check finding", logger.Err(err))
-				}
-				if has {
-					logger.Info("[ReportNode] Skipping duplicate finding", logger.String("key", key))
-					continue
-				}
-			}
-			severity := "Medium"
-			if strings.Contains(event.Reason, "Failed") || strings.Contains(event.Reason, "Error") {
-				severity = "High"
-			}
-			state.AddFinding(severity, event.Component, fmt.Sprintf("%s: %s", event.Reason, event.Message))
-			n.saveFinding(ctx, key)
-		}
-	}
-
 	// 检查网络连通性
 	if state.K8sInfo.NetworkInfo != nil {
 		for _, conn := range state.K8sInfo.NetworkInfo.Connectivity {
@@ -854,23 +787,107 @@ func (n *ReportNode) analyzeFindings(ctx context.Context, state *State) {
 }
 
 // extractPodLogs 提取 Pod 的日志
+// 优先从 state.K8sInfo.Logs 中获取，如果未找到则从 ExecutedCommands 中搜索
 func (n *ReportNode) extractPodLogs(state *State, podName string) string {
+	// 首先从 K8sInfo.Logs 中查找
 	for _, log := range state.K8sInfo.Logs {
 		if log.PodName == podName {
 			return log.Message
 		}
 	}
+
+	// 如果未找到，从 ExecutedCommands 中搜索 get_pod_logs 调用
+	for _, cmd := range state.AnalysisResult.ExecutedCommands {
+		// 检查是否是获取日志的命令
+		if strings.Contains(cmd.Command, "get_pod_logs") && cmd.Success {
+			// 检查命令中是否包含指定的 Pod 名称
+			if strings.Contains(cmd.Command, podName) {
+				return cmd.Output
+			}
+		}
+	}
+
 	return ""
 }
 
 // extractPodEvents 提取 Pod 相关的事件
+// 从 ExecutedCommands 中搜索 get_events 调用，查找与指定 Pod 或命名空间相关的事件
 func (n *ReportNode) extractPodEvents(state *State, podName string) []string {
-	var events []string
-	for _, event := range state.K8sInfo.Events {
-		if strings.Contains(event.Message, podName) {
-			events = append(events, fmt.Sprintf("[%s] %s: %s", event.Type, event.Reason, event.Message))
+	// 从 ExecutedCommands 中搜索 get_events 调用
+	for _, cmd := range state.AnalysisResult.ExecutedCommands {
+		// 检查是否是获取事件的命令
+		if strings.Contains(cmd.Command, "get_events") && cmd.Success {
+			// 解析输出为事件列表
+			events := parseEventsFromOutput(cmd.Output, podName)
+			if len(events) > 0 {
+				logger.Debug("[ReportNode] Found events from previous get_events call",
+					logger.String("pod", podName),
+					logger.Int("count", len(events)))
+				return events
+			}
 		}
 	}
+
+	// 没有找到相关事件，返回空切片
+	return []string{}
+}
+
+// parseEventsFromOutput 解析工具输出中的事件
+// 将 get_events 命令的输出解析为事件字符串列表
+func parseEventsFromOutput(output, targetPod string) []string {
+	if output == "" {
+		return []string{}
+	}
+
+	var events []string
+
+	// 尝试解析为结构化数据（JSON 格式）
+	// 如果输出是 JSON 格式的事件数组，解析它
+	if strings.HasPrefix(strings.TrimSpace(output), "[") || strings.HasPrefix(strings.TrimSpace(output), "{") {
+		// 尝试解析为通用 JSON，然后提取事件信息
+		// 这里使用简单的文本解析方法
+		lines := strings.Split(output, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			// 如果指定了目标 Pod，过滤相关事件
+			if targetPod != "" && !strings.Contains(line, targetPod) {
+				// 对于 namespace 级别的事件，我们仍然保留
+				// 只过滤明显不相关的 Pod 事件
+				if strings.Contains(line, "Pod") && !strings.Contains(line, targetPod) {
+					continue
+				}
+			}
+			// 过滤掉空行或无效行
+			if len(line) > 5 {
+				events = append(events, line)
+			}
+		}
+	} else {
+		// 文本格式，按行解析
+		lines := strings.Split(output, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			// 如果指定了目标 Pod，过滤相关事件
+			if targetPod != "" {
+				// 保留包含目标 Pod 名称的行
+				if strings.Contains(line, targetPod) {
+					events = append(events, line)
+				} else if strings.Contains(strings.ToLower(line), "namespace") && !strings.Contains(line, "Pod/") {
+					events = append(events, line)
+				}
+			} else {
+				// 没有指定 Pod，保留所有事件
+				events = append(events, line)
+			}
+		}
+	}
+
 	return events
 }
 

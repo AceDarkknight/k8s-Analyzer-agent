@@ -210,8 +210,7 @@ func (llm *ReActLLM) MakeDecision(ctx context.Context, state *State) (Decision, 
 func (llm *ReActLLM) Analyze(ctx context.Context, state *State) (string, error) {
 	logger.Info("[ReActLLM] Performing deep analysis",
 		logger.Int("iteration", state.IterationCount),
-		logger.Int("pods", len(state.K8sInfo.Pods)),
-		logger.Int("events", len(state.K8sInfo.Events)))
+		logger.Int("pods", len(state.K8sInfo.Pods)))
 
 	// 如果有错误 Pod，优先分析错误 Pod
 	for _, pod := range state.K8sInfo.Pods {
@@ -222,7 +221,7 @@ func (llm *ReActLLM) Analyze(ctx context.Context, state *State) (string, error) 
 				Status:    pod.Status,
 				Restarts:  pod.Restarts,
 				Logs:      extractPodLogs(state, pod.Name),
-				Events:    extractPodEvents(state, pod.Name),
+				Events:    []string{}, // 事件需要通过工具获取
 			}
 
 			// 调用 AnalyzeError 进行深入分析
@@ -244,7 +243,7 @@ func (llm *ReActLLM) Analyze(ctx context.Context, state *State) (string, error) 
 		Status:    "analyzing",
 		Restarts:  0,
 		Logs:      "",
-		Events:    formatEventsForAnalysis(state.K8sInfo.Events),
+		Events:    []string{}, // 事件需要通过工具获取
 	}
 
 	// 调用 AnalyzeError 进行分析
@@ -333,15 +332,22 @@ func getReActMessageModifier() react.MessageModifier {
 func getReActSystemPrompt() string {
 	return `你是一个 Kubernetes 故障排查专家。
 
-## 已收集的数据
-你已收到了一些基础数据（包括 Pod 状态、日志和事件）。
+## 动态获取数据模式
+你采用动态获取数据的模式进行分析。初始阶段只会收集基础的 Pod 和 Deployment 信息。
+如果你需要更多信息（如 Services、Events、Logs、ConfigMaps 等），请使用可用的工具主动获取。
 
-## 可用操作
-如果你需要更多信息来诊断问题（例如查看 ConfigMap、Secret、执行诊断命令），请使用可用的工具。
+## 可用工具
+你可以使用以下工具来获取所需信息：
+- list_services: 列出 Service 信息
+- get_events: 获取集群事件
+- list_pods: 列出 Pod 信息
+- get_pod_logs: 获取 Pod 日志
+- list_configmaps: 列出 ConfigMap 信息
+- 以及其他可用工具
 
 ## 分析要求
-1. 首先分析已提供的数据
-2. 如果需要更多信息，使用工具获取
+1. 首先分析已提供的基础数据
+2. 如果需要更多信息（Services、Events 等），使用工具主动获取
 3. 如果已有足够信息进行诊断，直接提供分析结果
 4. 最终回复必须是符合以下 JSON 格式的分析结果：
    - findings: 发现的问题列表，每个问题包含 severity(严重程度), resource(资源名称), message(问题描述)
@@ -459,9 +465,7 @@ func buildDecisionPrompt(state *State) string {
 	// 已收集的资源信息
 	sb.WriteString("## 已收集的资源\n")
 	sb.WriteString(fmt.Sprintf("- Pod 数量: %d\n", len(state.K8sInfo.Pods)))
-	sb.WriteString(fmt.Sprintf("- Service 数量: %d\n", len(state.K8sInfo.Services)))
 	sb.WriteString(fmt.Sprintf("- Deployment 数量: %d\n", len(state.K8sInfo.Deployments)))
-	sb.WriteString(fmt.Sprintf("- 事件数量: %d\n", len(state.K8sInfo.Events)))
 	sb.WriteString(fmt.Sprintf("- 已执行命令: %d\n\n", len(state.AnalysisResult.ExecutedCommands)))
 
 	// 当前问题
@@ -483,26 +487,10 @@ func buildDecisionPrompt(state *State) string {
 		sb.WriteString("- 无明显异常 Pod\n")
 	}
 
-	// 检查警告事件
-	var warningEvents []string
-	for _, event := range state.K8sInfo.Events {
-		if event.Type == "Warning" {
-			warningEvents = append(warningEvents, fmt.Sprintf("%s: %s", event.Reason, event.Message))
-		}
-	}
-	if len(warningEvents) > 0 {
-		sb.WriteString("警告事件:\n")
-		for _, e := range warningEvents {
-			sb.WriteString(fmt.Sprintf("- %s\n", e))
-		}
-	} else {
-		sb.WriteString("- 无警告事件\n")
-	}
-
 	sb.WriteString("\n## 决策选项\n")
 	sb.WriteString("请根据当前状态选择以下一种决策：\n")
 	sb.WriteString("- `report`: 已收集足够信息，生成分析报告\n")
-	sb.WriteString("- `deep_query`: 需要进一步查询更多信息\n")
+	sb.WriteString("- `deep_query`: 需要进一步查询更多信息（如果需要获取 Services 或 Events 信息，请使用 list_services 或 get_events 工具）\n")
 	sb.WriteString("- `continue`: 继续当前操作\n\n")
 
 	sb.WriteString("请只输出一个决策选项（report/deep_query/continue），不要输出其他内容。\n")
@@ -542,23 +530,19 @@ func extractPodLogs(state *State, podName string) string {
 }
 
 // extractPodEvents 提取指定 Pod 相关的事件
+// 注意：在新的动态获取模式下，事件需要通过工具获取
 func extractPodEvents(state *State, podName string) []string {
-	var events []string
-	for _, event := range state.K8sInfo.Events {
-		if strings.Contains(event.Message, podName) {
-			events = append(events, fmt.Sprintf("[%s] %s: %s", event.Type, event.Reason, event.Message))
-		}
-	}
-	return events
+	// 在新的动态获取模式下，事件通过 LLM 使用工具获取
+	// 此处返回空切片
+	return []string{}
 }
 
 // formatEventsForAnalysis 格式化事件列表用于分析
+// 注意：在新的动态获取模式下，事件通过工具获取
 func formatEventsForAnalysis(events []EventInfo) []string {
-	var result []string
-	for _, event := range events {
-		result = append(result, fmt.Sprintf("[%s] %s: %s", event.Type, event.Reason, event.Message))
-	}
-	return result
+	// 在新的动态获取模式下，事件通过 LLM 使用工具获取
+	// 此处返回空切片
+	return []string{}
 }
 
 // formatAnalysisResult 将 AnalysisResult 格式化为字符串
@@ -606,9 +590,7 @@ func buildBasicReport(state *State) string {
 	// 资源统计
 	sb.WriteString("## 资源统计\n\n")
 	sb.WriteString(fmt.Sprintf("- Pod 数量: %d\n", len(state.K8sInfo.Pods)))
-	sb.WriteString(fmt.Sprintf("- Service 数量: %d\n", len(state.K8sInfo.Services)))
 	sb.WriteString(fmt.Sprintf("- Deployment 数量: %d\n", len(state.K8sInfo.Deployments)))
-	sb.WriteString(fmt.Sprintf("- 事件数量: %d\n", len(state.K8sInfo.Events)))
 	sb.WriteString(fmt.Sprintf("- 已执行命令: %d\n\n", len(state.AnalysisResult.ExecutedCommands)))
 
 	// 发现的问题

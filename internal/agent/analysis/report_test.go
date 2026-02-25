@@ -30,6 +30,11 @@ func (m *MockStore) SaveFinding(ctx context.Context, key string, ttl time.Durati
 	return nil
 }
 
+func (m *MockStore) DeleteFinding(ctx context.Context, key string) error {
+	delete(m.findings, key)
+	return nil
+}
+
 func (m *MockStore) Close() error {
 	return nil
 }

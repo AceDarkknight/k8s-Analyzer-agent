@@ -118,6 +118,65 @@ func TestMemoryStore_ttl(t *testing.T) {
 	t.Log("MemoryStore TTL test passed")
 }
 
+// TestMemoryStore_delete 测试 MemoryStore 的删除功能
+func TestMemoryStore_delete(t *testing.T) {
+	store := NewMemoryStore()
+	defer store.Close()
+
+	ctx := context.Background()
+	key := "test:delete:key"
+	ttl := 1 * time.Hour
+
+	// 先保存一个 finding
+	err := store.SaveFinding(ctx, key, ttl)
+	if err != nil {
+		t.Fatalf("SaveFinding failed: %v", err)
+	}
+
+	// 确认存在
+	has, err := store.HasFinding(ctx, key)
+	if err != nil {
+		t.Fatalf("HasFinding failed: %v", err)
+	}
+	if !has {
+		t.Fatal("Expected key to exist after saving")
+	}
+
+	// 删除 finding
+	err = store.DeleteFinding(ctx, key)
+	if err != nil {
+		t.Fatalf("DeleteFinding failed: %v", err)
+	}
+
+	// 确认已删除
+	has, err = store.HasFinding(ctx, key)
+	if err != nil {
+		t.Fatalf("HasFinding failed: %v", err)
+	}
+	if has {
+		t.Fatal("Expected key to not exist after deletion")
+	}
+
+	t.Log("MemoryStore delete test passed")
+}
+
+// TestMemoryStore_delete_nonexistent 测试删除不存在的 key
+func TestMemoryStore_delete_nonexistent(t *testing.T) {
+	store := NewMemoryStore()
+	defer store.Close()
+
+	ctx := context.Background()
+	key := "test:delete:nonexistent"
+
+	// 删除不存在的 key 不应该返回错误
+	err := store.DeleteFinding(ctx, key)
+	if err != nil {
+		t.Fatalf("DeleteFinding failed for nonexistent key: %v", err)
+	}
+
+	t.Log("MemoryStore delete nonexistent key test passed")
+}
+
 // TestRedisStore_config_validation 测试 Redis 配置验证
 func TestRedisStore_config_validation(t *testing.T) {
 	// 测试无效配置

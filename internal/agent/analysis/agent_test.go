@@ -328,22 +328,27 @@ func TestCommandGenerator(t *testing.T) {
 		t.Errorf("Expected non-nil toolCall for restart pod")
 	}
 
-	// 测试有 Service 的情况（目前 K8s MCP 不直接支持 curl，我们跳过这个测试）
-	// 这个测试保持为 nil，因为当前实现不支持 Service 网络测试
+	// 测试有 Deployment 的情况
+	// 在新的动态获取模式下，Services 和 Events 需要通过工具获取
+	// 这里测试有 Deployment 的情况
 	state = NewState("test")
-	state.K8sInfo.Services = []ServiceInfo{
+	state.K8sInfo.Deployments = []DeploymentInfo{
 		{
-			Name:      "nginx-service",
-			ClusterIP: "10.0.0.1",
+			Name:     "nginx-deployment",
+			Replicas: 3,
 		},
 	}
 
 	toolCall, err = generator.GenerateCommand(state)
 	if err != nil {
-		t.Errorf("Expected error when generating command for service")
+		t.Errorf("Expected error when generating command for deployment")
 	}
 
-	// 注意：由于当前实现不支持 Service 网络测试，这里应该返回 nil
+	// 有 Deployment 但无错误 Pod，应该返回 nil
+	if toolCall != nil {
+		t.Errorf("Expected nil toolCall for deployment without error pods, got: %+v", toolCall)
+	}
+
 	// 这个测试用例暂时保留，但预期行为已改变
 
 	// 测试有正常 Pod 的情况

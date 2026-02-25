@@ -39,14 +39,8 @@ type K8sInfo struct {
 	// Pods Pod 列表信息
 	Pods []PodInfo
 
-	// Services Service 列表信息
-	Services []ServiceInfo
-
 	// Deployments Deployment 列表信息
 	Deployments []DeploymentInfo
-
-	// Events 事件列表
-	Events []EventInfo
 
 	// Logs 日志信息
 	Logs []LogInfo
@@ -65,17 +59,6 @@ type PodInfo struct {
 	NodeName   string
 	CreateTime time.Time
 	Labels     map[string]string
-}
-
-// ServiceInfo Service 信息
-type ServiceInfo struct {
-	Name       string
-	Namespace  string
-	Type       string
-	ClusterIP  string
-	ExternalIP string
-	Ports      []PortInfo
-	Selector   map[string]string
 }
 
 // DeploymentInfo Deployment 信息
