@@ -68,11 +68,17 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 	logger.Info("[InfoNode] Starting information collection", logger.String("userInput", state.UserInput))
 
 	// 步骤 1: 获取所有命名空间
-	namespaces, err := n.collectNamespaces(ctx)
+	namespaces, usedFallback, err := n.collectNamespaces(ctx)
 	if err != nil {
 		logger.Warn("[InfoNode] Failed to list namespaces, falling back to default", logger.Err(err))
 		// 回退到 default 命名空间，但不设置 LastError，因为这只是一个警告
 		namespaces = []string{"default"}
+		usedFallback = true
+	}
+
+	// 如果使用了回退列表，添加发现
+	if usedFallback {
+		state.AddFinding("Warning", "Cluster", "无法获取完整命名空间列表，已回退至部分扫描模式（仅检查 default 和 kube-system）。请检查 K8s MCP Server 连接状态。")
 	}
 
 	// 检查用户是否指定了特定命名空间
@@ -184,12 +190,13 @@ func (n *InfoNode) extractNamespace(input string) string {
 }
 
 // collectNamespaces 收集所有命名空间
-func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, error) {
+// 返回值：命名空间列表和是否使用了回退列表
+func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, bool, error) {
 	// 先检查 list_namespaces 工具是否可用
 	if !n.hasTool(ctx, "list_namespaces") {
 		logger.Info("[InfoNode] list_namespaces tool not available on MCP server, using hardcoded fallback list")
 		// 减少命名空间数量用于测试，只保留 default 和 kube-system
-		return []string{"default", "kube-system"}, nil
+		return []string{"default", "kube-system"}, true, nil
 	}
 
 	// 调用 K8s MCP 工具获取命名空间列表
@@ -197,7 +204,7 @@ func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, error) {
 	if err != nil {
 		logger.Warn("[InfoNode] list_namespaces tool call failed, using hardcoded fallback list", logger.Err(err))
 		// K8s MCP 服务器不支持 list_namespaces，返回硬编码的常见命名空间列表
-		return []string{"default", "kube-system"}, nil
+		return []string{"default", "kube-system"}, true, nil
 	}
 
 	// 解析结果
@@ -207,7 +214,7 @@ func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, error) {
 		k8sNamespaces, err := k8s.ParseToolResult[[]k8s.Namespace](result, "list_namespaces")
 		if err != nil {
 			logger.Warn("[InfoNode] Failed to parse namespaces result", logger.Err(err))
-			return []string{"default", "kube-system"}, nil
+			return []string{"default", "kube-system"}, true, nil
 		}
 		// 转换为字符串切片
 		for _, ns := range k8sNamespaces {
@@ -218,11 +225,11 @@ func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, error) {
 	// 如果没有获取到命名空间，使用硬编码列表作为回退
 	if len(namespaces) == 0 {
 		logger.Info("[InfoNode] No namespaces returned from MCP, using hardcoded fallback list")
-		return []string{"default", "kube-system"}, nil
+		return []string{"default", "kube-system"}, true, nil
 	}
 
 	logger.Debug("[InfoNode] Collected namespaces", logger.Any("namespaces", namespaces))
-	return namespaces, nil
+	return namespaces, false, nil
 }
 
 // collectPods 收集 Pod 信息

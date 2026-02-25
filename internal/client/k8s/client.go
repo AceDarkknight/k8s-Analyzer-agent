@@ -220,7 +220,16 @@ func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]
 	}
 
 	// 记录工具调用前的信息
-	argsJSON, _ := json.Marshal(args)
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		fmt.Printf("[K8s MCP] Failed to marshal args for tool %s: %v\n", name, err)
+		return nil, &ToolExecutionError{
+			ToolName: name,
+			Reason:   "failed to marshal args",
+			Err:      err,
+		}
+	}
+
 	fmt.Printf("[K8s MCP] 调用工具: %s, 参数: %s\n", name, string(argsJSON))
 
 	// 使用重试机制执行工具调用

@@ -143,7 +143,7 @@ func main() {
 
 	// 8. 启动 Agent 并传入示例参数
 	logger.Info("步骤 8: 启动 Analysis Agent 进行分析...")
-	userInput := "分析所有命名空间中的 Pod 状态"
+	userInput := "执行全集群健康巡检。重点关注：1) 所有命名空间下状态异常的 Pod (非 Running/Succeeded)；2) 未就绪的 Deployment；3) 关键 Service 的端点有效性；4) 最近 12 小时内的 Warning 级别事件。针对发现的任何故障，请结合日志和事件进行根因分析，并给出具体的修复建议和对应的 kubectl 命令。"
 	logger.Info("用户输入", logger.String("input", userInput))
 
 	result, err := analysisAgent.Run(ctx, userInput)

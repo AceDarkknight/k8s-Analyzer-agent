@@ -121,6 +121,11 @@ func (llm *ReActLLM) AnalyzeError(ctx context.Context, errorContext ErrorContext
 	logger.Debug("[ReActLLM] Starting ReAct agent generation",
 		logger.String("prompt_length", fmt.Sprintf("%d", len(prompt))))
 
+	// 记录 LLM 请求日志
+	logger.Info("[ReActLLM] Request (AnalyzeError)",
+		logger.String("role", string(message.Role)),
+		logger.String("content", truncateForLog(prompt, 2000)))
+
 	// 重试配置
 	maxRetries := 3
 	retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
@@ -139,6 +144,8 @@ func (llm *ReActLLM) AnalyzeError(ctx context.Context, errorContext ErrorContext
 
 		finalMsg, err = llm.agent.Generate(ctx, []*schema.Message{message})
 		if err == nil {
+			// 记录 LLM 响应日志
+			logLLMResponse("AnalyzeError", finalMsg)
 			break
 		}
 
@@ -186,6 +193,11 @@ func (llm *ReActLLM) MakeDecision(ctx context.Context, state *State) (Decision, 
 		schema.UserMessage(prompt),
 	}
 
+	// 记录 LLM 请求日志
+	logger.Info("[LLM] Request (MakeDecision)",
+		logger.Int("message_count", len(messages)),
+		logger.String("content", truncateForLog(prompt, 2000)))
+
 	// 调用 LLM 生成决策
 	resp, err := llm.chatModel.Generate(ctx, messages)
 	if err != nil {
@@ -193,6 +205,9 @@ func (llm *ReActLLM) MakeDecision(ctx context.Context, state *State) (Decision, 
 		// 降级到规则决策
 		return DecisionReport, nil
 	}
+
+	// 记录 LLM 响应日志
+	logLLMResponse("MakeDecision", resp)
 
 	// 解析响应获取决策
 	decision, err := parseDecisionResponse(resp.Content)
@@ -529,22 +544,6 @@ func extractPodLogs(state *State, podName string) string {
 	return ""
 }
 
-// extractPodEvents 提取指定 Pod 相关的事件
-// 注意：在新的动态获取模式下，事件需要通过工具获取
-func extractPodEvents(state *State, podName string) []string {
-	// 在新的动态获取模式下，事件通过 LLM 使用工具获取
-	// 此处返回空切片
-	return []string{}
-}
-
-// formatEventsForAnalysis 格式化事件列表用于分析
-// 注意：在新的动态获取模式下，事件通过工具获取
-func formatEventsForAnalysis(events []EventInfo) []string {
-	// 在新的动态获取模式下，事件通过 LLM 使用工具获取
-	// 此处返回空切片
-	return []string{}
-}
-
 // formatAnalysisResult 将 AnalysisResult 格式化为字符串
 func formatAnalysisResult(result AnalysisResult) string {
 	var sb strings.Builder
@@ -651,15 +650,65 @@ func (llm *ReActLLM) polishReport(ctx context.Context, basicReport string, state
 	sb.WriteString(basicReport)
 	sb.WriteString("\n\n请直接输出优化后的报告内容，不要添加解释。\n")
 
+	prompt := sb.String()
+
 	// 调用 LLM 生成优化后的报告
 	messages := []*schema.Message{
-		schema.UserMessage(sb.String()),
+		schema.UserMessage(prompt),
 	}
+
+	// 记录 LLM 请求日志
+	logger.Info("[ReActLLM] Request (polishReport)",
+		logger.Int("message_count", len(messages)),
+		logger.String("content", truncateForLog(prompt, 2000)))
 
 	resp, err := llm.chatModel.Generate(ctx, messages)
 	if err != nil {
+		logger.Error("[ReActLLM] polishReport failed", logger.Err(err))
 		return "", err
 	}
 
+	// 记录 LLM 响应日志
+	logLLMResponse("polishReport", resp)
+
 	return resp.Content, nil
+}
+
+// logLLMResponse 记录 LLM 响应日志
+// 包含主内容和推理内容（如果有）
+func logLLMResponse(methodName string, msg *schema.Message) {
+	if msg == nil {
+		logger.Warn("[ReActLLM] Response is nil", logger.String("method", methodName))
+		return
+	}
+
+	// 记录主内容
+	content := msg.Content
+	if content == "" {
+		content = "<empty>"
+	}
+
+	// 检查是否有推理/思考内容
+	reasoning := ""
+	if msg.ReasoningContent != "" {
+		reasoning = msg.ReasoningContent
+	}
+
+	if reasoning != "" {
+		logger.Info(fmt.Sprintf("[ReActLLM] Response (%s)", methodName),
+			logger.String("reasoning", truncateForLog(reasoning, 4000)),
+			logger.String("content", truncateForLog(content, 4000)))
+	} else {
+		logger.Info(fmt.Sprintf("[ReActLLM] Response (%s)", methodName),
+			logger.String("content", truncateForLog(content, 4000)))
+	}
+}
+
+// truncateForLog 截断日志内容，避免过长
+// 如果内容超过 maxLength，会截断并添加省略提示
+func truncateForLog(content string, maxLength int) string {
+	if len(content) <= maxLength {
+		return content
+	}
+	return content[:maxLength] + fmt.Sprintf("... [truncated, total length: %d]", len(content))
 }

@@ -211,17 +211,18 @@ func (a *Agent) buildGraph() error {
 
 	// 确定使用哪个 LLM 进行错误分析
 	// 优先使用 ReActLLM，如果可用的话
-	errorAnalysisLLM := a.llm
 	if a.reactLLM != nil {
 		logger.Info("[Agent] Using ReAct LLM for error analysis")
-		errorAnalysisLLM = a.reactLLM
+	} else {
+		logger.Error("[Agent] Using standard LLM for error analysis")
+		return fmt.Errorf("no LLM available for error analysis")
 	}
 
 	// 创建节点
 	infoNode := NewInfoNode(a.k8sClient)
 	decisionNode := NewDecisionNode(a.llm)
 	actionNode := NewActionNode(a.safetyAgent, a.k8sClient)
-	reportNode := NewReportNode(a.store, errorAnalysisLLM)
+	reportNode := NewReportNode(a.store, a.reactLLM)
 	commandGenerator := NewCommandGenerator()
 
 	// 添加 Info 节点
