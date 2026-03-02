@@ -48,8 +48,13 @@ func NewMockAnalysisLLM() *MockAnalysisLLM {
 	return &MockAnalysisLLM{}
 }
 
-func (m *MockAnalysisLLM) MakeDecision(ctx context.Context, state *State) (Decision, error) {
-	return DecisionReport, nil
+// MakeDecision 模拟决策 - 返回 DecisionResult
+func (m *MockAnalysisLLM) MakeDecision(ctx context.Context, state *State) (*DecisionResult, error) {
+	return &DecisionResult{
+		Decision:  DecisionReport,
+		Reasoning: "Mock decision for testing",
+		ToolCalls: nil,
+	}, nil
 }
 
 func (m *MockAnalysisLLM) Analyze(ctx context.Context, state *State) (string, error) {
@@ -85,6 +90,11 @@ func (m *MockAnalysisLLM) AnalyzeError(ctx context.Context, errorContext ErrorCo
 	}, nil
 }
 
+// SynthesizeReport 模拟生成综合报告
+func (m *MockAnalysisLLM) SynthesizeReport(ctx context.Context, userInput string, findings []Finding, commands []CommandExecution, k8sSummary string) (string, error) {
+	return "Synthesized report from mock LLM", nil
+}
+
 func TestReportNode_Execute_NewFinding(t *testing.T) {
 	store := NewMockStore()
 	llm := NewMockAnalysisLLM()
@@ -92,13 +102,12 @@ func TestReportNode_Execute_NewFinding(t *testing.T) {
 
 	state := NewState("test query")
 	state.K8sInfo.Namespace = "default"
-	state.K8sInfo.Pods = []PodInfo{
-		{
-			Name:      "error-pod",
-			Namespace: "default",
-			Status:    "Error",
-		},
-	}
+	// 使用 SetResources 设置 Pods
+	state.K8sInfo.SetResources("Pods", PodInfo{
+		Name:      "error-pod",
+		Namespace: "default",
+		Status:    "Error",
+	})
 
 	_, err := node.Execute(context.Background(), state)
 	if err != nil {
@@ -134,13 +143,12 @@ func TestReportNode_Execute_DuplicateFinding(t *testing.T) {
 
 	state := NewState("test query")
 	state.K8sInfo.Namespace = "default"
-	state.K8sInfo.Pods = []PodInfo{
-		{
-			Name:      "error-pod",
-			Namespace: "default",
-			Status:    "Error",
-		},
-	}
+	// 使用 SetResources 设置 Pods
+	state.K8sInfo.SetResources("Pods", PodInfo{
+		Name:      "error-pod",
+		Namespace: "default",
+		Status:    "Error",
+	})
 
 	_, err := node.Execute(context.Background(), state)
 	if err != nil {

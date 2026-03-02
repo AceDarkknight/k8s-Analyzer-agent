@@ -3,6 +3,7 @@ package analysis
 
 import (
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -29,6 +30,21 @@ type State struct {
 
 	// LastError 上一次的错误信息
 	LastError error
+
+	// ReasoningHistory 推理历史记录
+	// 用于在迭代中保持上下文
+	ReasoningHistory []ReasoningStep
+}
+
+// ReasoningStep 表示推理过程中的单个步骤
+// 包含 LLM 的思考、决策、工具调用和执行结果
+type ReasoningStep struct {
+	Iteration   int        `json:"iteration"`             // 迭代次数
+	Timestamp   time.Time  `json:"timestamp"`             // 时间戳
+	Thought     string     `json:"thought"`               // LLM 对此步骤的推理
+	Decision    string     `json:"decision"`              // 决策结果 (continue, report)
+	ToolCalls   []ToolCall `json:"tool_calls,omitempty"`  // 如果决策涉及工具调用
+	Observation string     `json:"observation,omitempty"` // 执行结果/输出的摘要
 }
 
 // K8sInfo 存储 K8s 集群信息
@@ -36,17 +52,75 @@ type K8sInfo struct {
 	// Namespace 当前操作的命名空间
 	Namespace string
 
-	// Pods Pod 列表信息
-	Pods []PodInfo
-
-	// Deployments Deployment 列表信息
-	Deployments []DeploymentInfo
-
-	// Logs 日志信息
-	Logs []LogInfo
+	// Resources 统一存储为切片。Key 是资源类型（如 "Pods", "Deployments"）。
+	// 即使是单个对象也会被封装为长度为 1 的切片。
+	Resources map[string][]any
 
 	// NetworkInfo 网络信息
 	NetworkInfo *NetworkInfo
+}
+
+// SetResources 直接将资源类型设置为提供的 items 切片
+// items 可以是多个对象，或者使用 slice... 语法传入一个切片
+func (k *K8sInfo) SetResources(resourceType string, items ...any) {
+	if k.Resources == nil {
+		k.Resources = make(map[string][]any)
+	}
+	k.Resources[resourceType] = items
+}
+
+// AppendResource 向 Resources[resourceType] 切片中追加一个或多个 items
+// 负责切片的初始化
+func (k *K8sInfo) AppendResource(resourceType string, items ...any) {
+	if k.Resources == nil {
+		k.Resources = make(map[string][]any)
+	}
+	k.Resources[resourceType] = append(k.Resources[resourceType], items...)
+}
+
+// GetSummary 获取资源汇总信息
+// 获取 Resources 的所有 Key 并排序以保证输出顺序
+// 遍历每个资源，直接使用 len(slice) 获取计数
+// 拼接成最终摘要，例如："命名空间: default, Pods: 12, Deployments: 2, Logs: 100"
+func (k *K8sInfo) GetSummary() string {
+	if len(k.Resources) == 0 {
+		if k.Namespace != "" {
+			return "命名空间: " + k.Namespace
+		}
+		return ""
+	}
+
+	// 获取所有 Key 并排序
+	keys := make([]string, 0, len(k.Resources))
+	for key := range k.Resources {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	// 构建摘要字符串
+	parts := make([]string, 0, len(k.Resources)+1)
+
+	// 先添加命名空间
+	if k.Namespace != "" {
+		parts = append(parts, "命名空间: "+k.Namespace)
+	}
+
+	// 添加每个资源类型的计数
+	for _, key := range keys {
+		count := len(k.Resources[key])
+		parts = append(parts, fmt.Sprintf("%s: %d", key, count))
+	}
+
+	// 用 ", " 连接所有部分
+	result := ""
+	for i, part := range parts {
+		if i > 0 {
+			result += ", "
+		}
+		result += part
+	}
+
+	return result
 }
 
 // PodInfo Pod 信息
@@ -192,8 +266,9 @@ func NewState(userInput string) *State {
 			Recommendations:  make([]Recommendation, 0),
 			ExecutedCommands: make([]CommandExecution, 0),
 		},
-		IterationCount: 0,
-		MaxIterations:  10, // 默认最大迭代次数
+		IterationCount:   0,
+		MaxIterations:    10,                       // 默认最大迭代次数
+		ReasoningHistory: make([]ReasoningStep, 0), // 初始化推理历史
 	}
 }
 
@@ -255,4 +330,36 @@ func (s *State) GetErrorSummary() string {
 		return ""
 	}
 	return s.LastError.Error()
+}
+
+// AddReasoningStep 添加一个新的推理步骤到历史记录
+// 参数为 LLM 的思考过程、决策结果和工具调用列表
+func (s *State) AddReasoningStep(thought, decision string, toolCalls []ToolCall) {
+	step := ReasoningStep{
+		Iteration: len(s.ReasoningHistory) + 1,
+		Timestamp: time.Now(),
+		Thought:   thought,
+		Decision:  decision,
+		ToolCalls: toolCalls,
+	}
+	s.ReasoningHistory = append(s.ReasoningHistory, step)
+}
+
+// UpdateLastStepObservation 更新最后一个推理步骤的观察结果
+// 用于在 ActionNode 执行工具调用后，将执行结果写入状态
+func (s *State) UpdateLastStepObservation(observation string) {
+	if len(s.ReasoningHistory) > 0 {
+		lastIndex := len(s.ReasoningHistory) - 1
+		s.ReasoningHistory[lastIndex].Observation = observation
+	}
+}
+
+// GetLastReasoningStep 获取最后一个推理步骤
+// 返回 nil 如果历史记录为空
+func (s *State) GetLastReasoningStep() *ReasoningStep {
+	if len(s.ReasoningHistory) == 0 {
+		return nil
+	}
+	lastIndex := len(s.ReasoningHistory) - 1
+	return &s.ReasoningHistory[lastIndex]
 }

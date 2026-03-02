@@ -254,7 +254,48 @@ func TestMockLLM(t *testing.T) {
 	// 测试达到最大迭代次数
 	state.IterationCount = 10
 
-	decision, err := llm.MakeDecision(context.Background(), state)
+	decisionResult, err := llm.MakeDecision(context.Background(), state)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if decisionResult == nil {
+		t.Fatal("Expected non-nil decision result")
+	}
+
+	if decisionResult.Decision != DecisionReport {
+		t.Errorf("Expected decision '%s', got '%s'", DecisionReport, decisionResult.Decision)
+	}
+
+	// 测试有错误 Pod 的情况
+	state = NewState("test")
+	// 使用 SetResources 设置 Pods
+	state.K8sInfo.SetResources("Pods", PodInfo{
+		Name:   "error-pod",
+		Status: "Error",
+	})
+
+	decisionResult, err = llm.MakeDecision(context.Background(), state)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if decisionResult == nil || decisionResult.Decision == "" {
+		t.Errorf("Expected non-empty decision")
+	}
+}
+
+// TestDecisionNode 测试 DecisionNode
+func TestDecisionNode(t *testing.T) {
+	llm := NewMockLLM()
+	decisionNode := NewDecisionNode(llm)
+
+	state := NewState("test")
+
+	// 测试达到最大迭代次数 - 此时不会添加推理步骤（直接返回）
+	state.IterationCount = 10
+
+	decision, err := decisionNode.Execute(context.Background(), state)
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -263,16 +304,17 @@ func TestMockLLM(t *testing.T) {
 		t.Errorf("Expected decision '%s', got '%s'", DecisionReport, decision)
 	}
 
-	// 测试有错误 Pod 的情况
-	state = NewState("test")
-	state.K8sInfo.Pods = []PodInfo{
-		{
-			Name:   "error-pod",
-			Status: "Error",
-		},
-	}
+	// 注意：当达到最大迭代次数时，不会添加推理步骤（提前返回）
 
-	decision, err = llm.MakeDecision(context.Background(), state)
+	// 测试有错误 Pod 的情况 - 应该添加推理步骤
+	state = NewState("test")
+	// 使用 SetResources 设置 Pods
+	state.K8sInfo.SetResources("Pods", PodInfo{
+		Name:   "error-pod",
+		Status: "Error",
+	})
+
+	decision, err = decisionNode.Execute(context.Background(), state)
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -280,111 +322,19 @@ func TestMockLLM(t *testing.T) {
 	if decision == "" {
 		t.Errorf("Expected non-empty decision")
 	}
-}
 
-// TestCommandGenerator 测试命令生成器
-func TestCommandGenerator(t *testing.T) {
-	generator := NewCommandGenerator()
-
-	state := NewState("test")
-
-	// 测试有错误 Pod 的情况
-	state.K8sInfo.Pods = []PodInfo{
-		{
-			Name:   "error-pod",
-			Status: "Error",
-		},
+	// 验证推理历史已更新
+	if len(state.ReasoningHistory) != 1 {
+		t.Errorf("Expected 1 reasoning step, got %d", len(state.ReasoningHistory))
 	}
 
-	toolCall, err := generator.GenerateCommand(state)
-	if err != nil {
-		t.Errorf("Expected error when generating command for error pod")
+	// 验证推理步骤的内容
+	reasoningStep := state.ReasoningHistory[0]
+	if reasoningStep.Thought == "" {
+		t.Error("Expected non-empty thought in reasoning step")
 	}
-
-	if toolCall == nil {
-		t.Errorf("Expected non-nil toolCall for error pod")
-	}
-
-	if toolCall.Tool != "get_pod_logs" {
-		t.Errorf("Expected tool 'get_pod_logs', got '%s'", toolCall.Tool)
-	}
-
-	// 测试有重启次数过多的 Pod
-	state = NewState("test")
-	state.K8sInfo.Pods = []PodInfo{
-		{
-			Name:     "restart-pod",
-			Status:   "Running",
-			Restarts: 6,
-		},
-	}
-
-	toolCall, err = generator.GenerateCommand(state)
-	if err != nil {
-		t.Errorf("Unexpected error when generating command for restart pod")
-	}
-
-	if toolCall == nil {
-		t.Errorf("Expected non-nil toolCall for restart pod")
-	}
-
-	// 测试有 Deployment 的情况
-	// 在新的动态获取模式下，Services 和 Events 需要通过工具获取
-	// 这里测试有 Deployment 的情况
-	state = NewState("test")
-	state.K8sInfo.Deployments = []DeploymentInfo{
-		{
-			Name:     "nginx-deployment",
-			Replicas: 3,
-		},
-	}
-
-	toolCall, err = generator.GenerateCommand(state)
-	if err != nil {
-		t.Errorf("Expected error when generating command for deployment")
-	}
-
-	// 有 Deployment 但无错误 Pod，应该返回 nil
-	if toolCall != nil {
-		t.Errorf("Expected nil toolCall for deployment without error pods, got: %+v", toolCall)
-	}
-
-	// 这个测试用例暂时保留，但预期行为已改变
-
-	// 测试有正常 Pod 的情况
-	state = NewState("test")
-	state.K8sInfo.Pods = []PodInfo{
-		{
-			Name:   "normal-pod",
-			Status: "Running",
-		},
-	}
-
-	toolCall, err = generator.GenerateCommand(state)
-	if err != nil {
-		t.Errorf("Expected error when generating command for normal pod")
-	}
-
-	// 正常 Pod 不需要获取日志，应该返回 nil
-	if toolCall != nil {
-		t.Errorf("Expected nil toolCall for normal pod, got: %+v", toolCall)
-	}
-
-	// 测试已经执行了命令的情况 - 应该返回空而不是错误
-	state = NewState("test")
-	state.AnalysisResult.ExecutedCommands = []CommandExecution{
-		{
-			Command: "kubectl get pods -A",
-			Success: true,
-		},
-	}
-
-	toolCall, err = generator.GenerateCommand(state)
-	if err != nil {
-		t.Errorf("Unexpected error when command already executed: %v", err)
-	}
-	if toolCall != nil {
-		t.Errorf("Expected nil toolCall when all commands already executed, got: %+v", toolCall)
+	if reasoningStep.Decision == "" {
+		t.Error("Expected non-empty decision in reasoning step")
 	}
 }
 

@@ -223,7 +223,6 @@ func (a *Agent) buildGraph() error {
 	decisionNode := NewDecisionNode(a.llm)
 	actionNode := NewActionNode(a.safetyAgent, a.k8sClient)
 	reportNode := NewReportNode(a.store, a.reactLLM)
-	commandGenerator := NewCommandGenerator()
 
 	// 添加 Info 节点
 	if err := g.AddLambdaNode(NodeInfo, compose.InvokableLambda(
@@ -262,24 +261,8 @@ func (a *Agent) buildGraph() error {
 			// 增加迭代计数
 			state.IterationCount++
 
-			// 生成要执行的命令
-			toolCall, err := commandGenerator.GenerateCommand(state)
-			if err != nil {
-				logger.Error("Failed to generate command", logger.Err(err))
-				// 设置错误状态，让决策节点处理
-				state.LastError = err
-				return state, nil
-			}
-
-			// 如果没有命令可执行，设置标志让决策节点知道
-			if toolCall == nil {
-				logger.Debug("No new command to execute, proceeding to decision")
-				state.LastAction = "no_command"
-				return state, nil
-			}
-
-			// 执行命令
-			return actionNode.Execute(ctx, state, toolCall)
+			// 执行工具调用（从 ReasoningHistory 获取）
+			return actionNode.Execute(ctx, state)
 		},
 	)); err != nil {
 		return fmt.Errorf("failed to add action node: %w", err)

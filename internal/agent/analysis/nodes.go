@@ -1,5 +1,4 @@
 // Package analysis 提供 Graph 节点实现
-// Package analysis 提供 Graph 节点实现
 package analysis
 
 import (
@@ -9,14 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
-
-// quietContextKey 用于在 Context 中传递安静模式标志
-var quietContextKey = struct{}{}
 
 // K8sClient K8s 客户端接口
 type K8sClient interface {
@@ -115,16 +110,6 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 			allPods = append(allPods, pods...)
 		}
 
-		// // 收集 Service 信息
-		// services, err := n.collectServices(ctx, ns)
-		// if err != nil {
-		// 	logger.Warn("[InfoNode] Failed to collect services from namespace",
-		// 		logger.String("namespace", ns),
-		// 		logger.Err(err))
-		// } else {
-		// 	allServices = append(allServices, services...)
-		// }
-
 		// 收集 Deployment 信息
 		deployments, err := n.collectDeployments(ctx, ns)
 		if err != nil {
@@ -134,30 +119,25 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 		} else {
 			allDeployments = append(allDeployments, deployments...)
 		}
-
-		// // 收集事件信息
-		// events, err := n.collectEvents(ctx, ns)
-		// if err != nil {
-		// 	logger.Warn("[InfoNode] Failed to collect events from namespace",
-		// 		logger.String("namespace", ns),
-		// 		logger.Err(err))
-		// } else {
-		// 	allEvents = append(allEvents, events...)
-		// }
 	}
 
 	// 更新状态
-	state.K8sInfo.Pods = allPods
-	// state.K8sInfo.Services = allServices
-	state.K8sInfo.Deployments = allDeployments
-	// state.K8sInfo.Events = allEvents
+	// 将特定类型切片转换为 []any
+	podsAny := make([]any, len(allPods))
+	for i, pod := range allPods {
+		podsAny[i] = pod
+	}
+	deploymentsAny := make([]any, len(allDeployments))
+	for i, d := range allDeployments {
+		deploymentsAny[i] = d
+	}
+	state.K8sInfo.SetResources("Pods", podsAny...)
+	state.K8sInfo.SetResources("Deployments", deploymentsAny...)
 
 	logger.Info("[InfoNode] Collected information from all namespaces",
 		logger.Int("namespaces", len(namespaces)),
 		logger.Int("pods", len(allPods)),
-		// logger.Int("services", len(allServices)),
 		logger.Int("deployments", len(allDeployments)),
-		// logger.Int("events", len(allEvents))
 	)
 
 	return state, nil
@@ -272,7 +252,7 @@ func (n *InfoNode) collectPods(ctx context.Context, namespace string) ([]PodInfo
 
 //collectServices 收集 Service 信息
 //func (n *InfoNode) collectServices(ctx context.Context, namespace string) ([]ServiceInfo, error) {
-//	args := map[string]interface{}{
+//	args := map[string]interface{} {
 //		"namespace": namespace,
 //	}
 
@@ -303,7 +283,7 @@ func (n *InfoNode) collectPods(ctx context.Context, namespace string) ([]PodInfo
 
 //	logger.Debug("[InfoNode] Collected services from namespace", logger.String("namespace", namespace), logger.Int("count", len(services)))
 //	return services, nil
-//}
+// }
 
 // collectDeployments 收集 Deployment 信息
 func (n *InfoNode) collectDeployments(ctx context.Context, namespace string) ([]DeploymentInfo, error) {
@@ -349,6 +329,81 @@ func (n *InfoNode) collectDeployments(ctx context.Context, namespace string) ([]
 	return deployments, nil
 }
 
+// filterExecutedCommands 过滤已执行的命令
+// 过滤掉失败的命令（如 invalid params, unknown tool 等），并去重/折叠连续失败的相同工具调用
+func filterExecutedCommands(commands []CommandExecution) []CommandExecution {
+	// 定义需要过滤的错误关键词
+	errorKeywords := []string{
+		"invalid params",
+		"unknown tool",
+		"tool not found",
+		"invalid arguments",
+		"missing required parameter",
+		"parameter error",
+		"invalid tool",
+	}
+
+	// 第一步：过滤掉失败的命令（包含错误关键词）
+	var filtered []CommandExecution
+	for _, cmd := range commands {
+		if cmd.Success {
+			filtered = append(filtered, cmd)
+			continue
+		}
+
+		// 检查输出是否包含错误关键词
+		isErrorCmd := false
+		outputLower := strings.ToLower(cmd.Output)
+		for _, keyword := range errorKeywords {
+			if strings.Contains(outputLower, strings.ToLower(keyword)) {
+				isErrorCmd = true
+				break
+			}
+		}
+
+		// 如果不是错误命令，保留
+		if !isErrorCmd {
+			filtered = append(filtered, cmd)
+		}
+	}
+
+	// 第二步：去重/折叠连续失败的相同工具调用
+	// 我们只保留最后一个连续失败的工具调用（如果有多个连续失败的话）
+	var result []CommandExecution
+	var lastFailedTool string
+
+	for _, cmd := range filtered {
+		// 提取工具名称（取命令的第一个单词）
+		parts := strings.Fields(cmd.Command)
+		var toolName string
+		if len(parts) > 0 {
+			toolName = parts[0]
+		} else {
+			toolName = cmd.Command
+		}
+
+		// 检查是否是连续失败
+		if !cmd.Success && toolName == lastFailedTool {
+			// 连续失败，替换最后一个（跳过当前，保留最后一个）
+			if len(result) > 0 {
+				result[len(result)-1] = cmd
+			}
+		} else {
+			// 不是连续失败，添加
+			result = append(result, cmd)
+		}
+
+		// 更新最后失败的工具名称
+		if !cmd.Success {
+			lastFailedTool = toolName
+		} else {
+			lastFailedTool = ""
+		}
+	}
+
+	return result
+}
+
 // DecisionNode 决策节点
 // 分析当前信息，决定下一步行动
 type DecisionNode struct {
@@ -373,15 +428,24 @@ func (n *DecisionNode) Execute(ctx context.Context, state *State) (Decision, err
 	}
 
 	// 调用 LLM 进行决策
-	decision, err := n.llm.MakeDecision(ctx, state)
+	decisionResult, err := n.llm.MakeDecision(ctx, state)
 	if err != nil {
 		logger.Error("[DecisionNode] LLM decision failed", logger.Err(err))
 		// 降级到规则引擎
 		return n.fallbackDecision(state), nil
 	}
 
-	logger.Debug("[DecisionNode] Decision made", logger.String("decision", string(decision)))
-	return decision, nil
+	// 将 LLM 的决策结果添加到推理历史
+	if decisionResult != nil {
+		state.AddReasoningStep(decisionResult.Reasoning, string(decisionResult.Decision), decisionResult.ToolCalls)
+		logger.Debug("[DecisionNode] Decision made",
+			logger.String("decision", string(decisionResult.Decision)),
+			logger.String("reasoning", decisionResult.Reasoning))
+		return decisionResult.Decision, nil
+	}
+
+	// 如果结果为空，使用降级决策
+	return n.fallbackDecision(state), nil
 }
 
 // fallbackDecision 降级决策（规则引擎）
@@ -395,21 +459,26 @@ func (n *DecisionNode) fallbackDecision(state *State) Decision {
 	}
 
 	// 检查是否有问题 Pod
-	for _, pod := range state.K8sInfo.Pods {
-		if pod.Status == "Error" || pod.Status == "CrashLoopBackOff" {
+	for _, pod := range state.K8sInfo.Resources["Pods"] {
+		podInfo, ok := pod.(PodInfo)
+		if !ok {
+			continue
+		}
+		if podInfo.Status == "Error" || podInfo.Status == "CrashLoopBackOff" {
 			// Pod 有问题，建议查看日志
-			logger.Debug("[DecisionNode] Found problematic pod", logger.String("pod", pod.Name), logger.String("status", pod.Status))
+			logger.Debug("[DecisionNode] Found problematic pod", logger.String("pod", podInfo.Name), logger.String("status", podInfo.Status))
 			return DecisionDeepQuery
 		}
-		if pod.Restarts > 5 {
+		if podInfo.Restarts > 5 {
 			// Pod 重启次数过多
-			logger.Debug("[DecisionNode] Pod has many restarts", logger.String("pod", pod.Name), logger.Int32("restarts", pod.Restarts))
+			logger.Debug("[DecisionNode] Pod has many restarts", logger.String("pod", podInfo.Name), logger.Int32("restarts", podInfo.Restarts))
 			return DecisionDeepQuery
 		}
 	}
 
 	// 如果已经收集了一些信息，可以生成报告
-	if state.IterationCount > 0 && (len(state.K8sInfo.Pods) > 0 || len(state.AnalysisResult.ExecutedCommands) > 0) {
+	podsLen := len(state.K8sInfo.Resources["Pods"])
+	if state.IterationCount > 0 && (podsLen > 0 || len(state.AnalysisResult.ExecutedCommands) > 0) {
 		return DecisionReport
 	}
 
@@ -433,111 +502,132 @@ func NewActionNode(safetyAgent SafetyAgent, k8sClient K8sClient) *ActionNode {
 }
 
 // Execute 执行命令
-// 支持两种命令类型：K8s MCP 工具调用 和 Shell 命令
-func (n *ActionNode) Execute(ctx context.Context, state *State, toolCall *ToolCall) (*State, error) {
-	logger.Info("[ActionNode] Executing command", logger.Any("toolCall", toolCall))
+// 从 state.ReasoningHistory 中获取最新的工具调用列表并执行
+func (n *ActionNode) Execute(ctx context.Context, state *State) (*State, error) {
+	logger.Info("[ActionNode] Executing commands from ReasoningHistory", logger.Int("iteration", state.IterationCount))
 
-	// 如果命令为空，检查是否有错误
-	if toolCall == nil {
-		quiet := ctx.Value(quietContextKey).(bool)
-		if state.LastError != nil {
-			logger.Warn("[ActionNode] No command to execute, but there is an error", logger.Err(state.LastError))
-			// 保持错误状态，让决策节点处理
-			return state, nil
-		}
-		if !quiet {
-			logger.Debug("[ActionNode] No command to execute, skipping")
-		}
+	// 获取最新的推理步骤
+	lastStep := state.GetLastReasoningStep()
+	if lastStep == nil {
+		logger.Warn("[ActionNode] No reasoning step found, skipping action execution")
 		return state, nil
 	}
 
-	// 根据命令类型执行不同的逻辑
-	if toolCall.Type == "k8s" {
-		// 执行 K8s MCP 工具调用
-		return n.executeK8sTool(ctx, state, toolCall)
+	// 检查是否有工具调用
+	if len(lastStep.ToolCalls) == 0 {
+		logger.Debug("[ActionNode] No tool calls in the reasoning step, skipping")
+		return state, nil
 	}
 
-	// 否则，使用 Safety Agent 执行 Shell 命令（兼容旧逻辑）
-	return n.executeShellCommand(ctx, state, toolCall.Command)
-}
-
-// executeK8sTool 执行 K8s MCP 工具调用
-func (n *ActionNode) executeK8sTool(ctx context.Context, state *State, toolCall *ToolCall) (*State, error) {
-	logger.Info("[ActionNode] Executing K8s MCP tool", logger.String("tool", toolCall.Tool))
-
-	// 调用 K8s MCP 工具
-	result, err := n.k8sClient.CallTool(ctx, toolCall.Tool, toolCall.Args)
-	if err != nil {
-		logger.Error("[ActionNode] K8s tool execution failed", logger.Err(err), logger.String("tool", toolCall.Tool))
-
-		state.LastError = err
-		state.AddCommandExecution(toolCall.Command, err.Error(), false)
-		return state, nil // 不返回错误，让决策节点处理
+	// 执行所有工具调用并收集结果
+	var observations []string
+	for _, toolCall := range lastStep.ToolCalls {
+		observation, err := n.executeToolCall(ctx, state, &toolCall)
+		if err != nil {
+			logger.Warn("[ActionNode] Tool call execution returned error", logger.Err(err))
+			observations = append(observations, fmt.Sprintf("工具 %s 执行失败: %v", toolCall.Tool, err))
+		} else {
+			observations = append(observations, observation)
+		}
 	}
 
-	// 解析结果为字符串
-	output, err := k8s.ParseToolResultAsString(result)
-	if err != nil {
-		logger.Warn("[ActionNode] Failed to parse K8s tool result", logger.Err(err))
-		output = fmt.Sprintf("Tool executed but failed to parse result: %v", err)
-	}
+	// 将所有观察结果合并为一个字符串
+	combinedObservation := strings.Join(observations, "\n---\n")
+	state.UpdateLastStepObservation(combinedObservation)
 
-	logger.Info("[ActionNode] K8s tool executed successfully", logger.String("tool", toolCall.Tool))
-	state.AddCommandExecution(toolCall.Command, output, true)
-	state.LastAction = toolCall.Command
-
-	// 清除 LastError，因为命令执行成功
-	state.LastError = nil
-
-	// 解析输出并更新状态
-	n.parseCommandOutput(state, toolCall.Command, output)
-
+	logger.Info("[ActionNode] All tool calls executed", logger.Int("count", len(lastStep.ToolCalls)))
 	return state, nil
 }
 
-// executeShellCommand 执行 Shell 命令（兼容旧逻辑）
-func (n *ActionNode) executeShellCommand(ctx context.Context, state *State, command string) (*State, error) {
-	logger.Info("[ActionNode] Executing shell command", logger.String("command", command))
+// executeToolCall 执行单个工具调用
+// 根据工具名称分发到不同的执行器
+func (n *ActionNode) executeToolCall(ctx context.Context, state *State, toolCall *ToolCall) (string, error) {
+	logger.Info("[ActionNode] Executing tool call", logger.String("tool", toolCall.Tool))
 
-	// 调用 Safety Agent 执行命令
-	output, err := n.safetyAgent.ExecuteSafeCommand(ctx, command)
-	if err != nil {
-		logger.Error("[ActionNode] Command execution failed", logger.Err(err), logger.String("command", command))
+	var output string
+	var err error
 
-		// 检查是否是安全拒绝错误
-		if _, ok := err.(*safety.UnsafeCommandError); ok {
-			state.AddFinding("High", "Security", fmt.Sprintf("Command rejected by safety check: %s", command))
+	// 根据工具名称进行分发
+	switch toolCall.Tool {
+	case "execute_safe_command":
+		// 路由到 SafetyAgent
+		// 从参数中提取 command 和 reason
+		command, _ := toolCall.Args["command"].(string)
+		reason, _ := toolCall.Args["reason"].(string)
+
+		if command == "" {
+			return "", fmt.Errorf("missing required parameter: command")
 		}
 
-		state.LastError = err
-		state.AddCommandExecution(command, err.Error(), false)
-		return state, nil // 不返回错误，让决策节点处理
+		// 构造上下文信息用于审计
+		contextInfo := map[string]interface{}{
+			"reason": reason,
+			"source": "ActionNode",
+		}
+
+		// 调用 SafetyAgent 执行安全命令
+		output, err = n.safetyAgent.ExecuteSafeCommandWithAudit(ctx, command, contextInfo)
+		if err != nil {
+			logger.Error("[ActionNode] SafetyAgent command execution failed",
+				logger.Err(err),
+				logger.String("command", command))
+			return "", err
+		}
+
+		// 记录命令执行
+		state.AddCommandExecution(command, output, true)
+		state.LastAction = command
+
+	default:
+		// 默认路由到 K8sClient (MCP)
+		// 包括: list_pods, get_pod_logs, describe_pod, list_events 等
+		result, err := n.k8sClient.CallTool(ctx, toolCall.Tool, toolCall.Args)
+		if err != nil {
+			logger.Error("[ActionNode] K8s tool execution failed",
+				logger.Err(err),
+				logger.String("tool", toolCall.Tool))
+
+			state.LastError = err
+			// 记录失败的命令
+			state.AddCommandExecution(toolCall.Command, err.Error(), false)
+			return "", err
+		}
+
+		// 解析结果为字符串
+		output, err = k8s.ParseToolResultAsString(result)
+		if err != nil {
+			logger.Warn("[ActionNode] Failed to parse K8s tool result", logger.Err(err))
+			output = fmt.Sprintf("Tool executed but failed to parse result: %v", err)
+		}
+
+		// 记录命令执行
+		commandStr := fmt.Sprintf("%s %v", toolCall.Tool, toolCall.Args)
+		state.AddCommandExecution(commandStr, output, true)
+		state.LastAction = toolCall.Tool
+
+		// 清除 LastError，因为命令执行成功
+		state.LastError = nil
+
+		// 解析输出并更新状态（用于后续分析）
+		n.parseToolOutput(state, toolCall.Tool, output)
 	}
 
-	logger.Info("[ActionNode] Command executed successfully", logger.String("command", command))
-	state.AddCommandExecution(command, output, true)
-	state.LastAction = command
-
-	// 清除 LastError，因为命令执行成功
-	state.LastError = nil
-
-	// 解析输出并更新状态
-	n.parseCommandOutput(state, command, output)
-
-	return state, nil
+	logger.Info("[ActionNode] Tool executed successfully", logger.String("tool", toolCall.Tool))
+	return output, nil
 }
 
-// parseCommandOutput 解析命令输出
-func (n *ActionNode) parseCommandOutput(state *State, command, output string) {
+// parseToolOutput 解析工具输出并更新状态
+// 根据工具类型解析输出并存储到相应的状态字段
+func (n *ActionNode) parseToolOutput(state *State, toolName, output string) {
 	// 根据命令类型解析输出
-	if strings.Contains(command, "logs") {
+	if strings.Contains(toolName, "logs") {
 		// 日志输出
 		logInfo := LogInfo{
 			Message:   output,
 			Timestamp: time.Now(),
 		}
-		state.K8sInfo.Logs = append(state.K8sInfo.Logs, logInfo)
-	} else if strings.Contains(command, "curl") || strings.Contains(command, "ping") {
+		state.K8sInfo.AppendResource("Logs", logInfo)
+	} else if strings.Contains(toolName, "curl") || strings.Contains(toolName, "ping") {
 		// 网络测试输出
 		if state.K8sInfo.NetworkInfo == nil {
 			state.K8sInfo.NetworkInfo = &NetworkInfo{
@@ -584,8 +674,21 @@ func (n *ReportNode) saveFinding(ctx context.Context, key string) {
 func (n *ReportNode) Execute(ctx context.Context, state *State) (*State, error) {
 	logger.Info("[ReportNode] Generating analysis report")
 
-	// 生成摘要
-	state.AnalysisResult.Summary = n.generateSummary(state)
+	// 过滤已执行的命令，去除噪声命令
+	filteredCommands := filterExecutedCommands(state.AnalysisResult.ExecutedCommands)
+
+	// 生成 K8s 资源摘要
+	k8sSummary := state.K8sInfo.GetSummary()
+
+	// 使用 LLM 生成综合报告摘要
+	summary, err := n.llm.SynthesizeReport(ctx, state.UserInput, state.AnalysisResult.Findings, filteredCommands, k8sSummary)
+	if err != nil {
+		logger.Warn("[ReportNode] Failed to synthesize report with LLM, using fallback", logger.Err(err))
+		// 如果 LLM 调用失败，使用简单的摘要作为回退
+		state.AnalysisResult.Summary = n.generateSummary(state, filteredCommands)
+	} else {
+		state.AnalysisResult.Summary = summary
+	}
 
 	// 分析发现的问题（传递 ctx 用于去重）
 	n.analyzeFindings(ctx, state)
@@ -607,16 +710,33 @@ func (n *ReportNode) Execute(ctx context.Context, state *State) (*State, error) 
 	return state, nil
 }
 
-// generateSummary 生成摘要
-func (n *ReportNode) generateSummary(state *State) string {
+// generateSummary 生成摘要（回退方案，当 LLM 不可用时使用）
+func (n *ReportNode) generateSummary(state *State, filteredCommands []CommandExecution) string {
 	var sb strings.Builder
 
 	sb.WriteString("## 分析报告\n\n")
 	sb.WriteString(fmt.Sprintf("**用户查询**: %s\n\n", state.UserInput))
 	sb.WriteString(fmt.Sprintf("**命名空间**: %s\n\n", state.K8sInfo.Namespace))
 	sb.WriteString(fmt.Sprintf("**迭代次数**: %d/%d\n\n", state.IterationCount, state.MaxIterations))
-	sb.WriteString(fmt.Sprintf("**收集的 Pod 数量**: %d\n\n", len(state.K8sInfo.Pods)))
-	sb.WriteString(fmt.Sprintf("**执行的命令数量**: %d\n\n", len(state.AnalysisResult.ExecutedCommands)))
+	sb.WriteString(fmt.Sprintf("**收集的资源信息**: %s\n\n", state.K8sInfo.GetSummary()))
+	sb.WriteString(fmt.Sprintf("**执行的命令数量**: %d\n\n", len(filteredCommands)))
+
+	// 添加发现的问题摘要
+	if len(state.AnalysisResult.Findings) > 0 {
+		sb.WriteString("**发现的问题**:\n\n")
+		for _, f := range state.AnalysisResult.Findings {
+			sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", f.Severity, f.Resource, f.Message))
+		}
+		sb.WriteString("\n")
+	}
+
+	// 添加建议摘要
+	if len(state.AnalysisResult.Recommendations) > 0 {
+		sb.WriteString("**建议**:\n\n")
+		for _, r := range state.AnalysisResult.Recommendations {
+			sb.WriteString(fmt.Sprintf("- [%s] %s\n", r.Priority, r.Action))
+		}
+	}
 
 	return sb.String()
 }
@@ -634,11 +754,16 @@ func (n *ReportNode) analyzeFindings(ctx context.Context, state *State) {
 	var pendingAnalyses []pendingAnalysis
 
 	// 检查 Pod 状态并收集需要分析的错误
-	for _, pod := range state.K8sInfo.Pods {
-		switch pod.Status {
+	pods := state.K8sInfo.Resources["Pods"]
+	for _, pod := range pods {
+		podInfo, ok := pod.(PodInfo)
+		if !ok {
+			continue
+		}
+		switch podInfo.Status {
 		case "Error":
 			// 生成唯一的 Finding key
-			key := fmt.Sprintf("finding:%s:%s:%s", state.K8sInfo.Namespace, pod.Name, pod.Status)
+			key := fmt.Sprintf("finding:%s:%s:%s", state.K8sInfo.Namespace, podInfo.Name, podInfo.Status)
 			// 检查是否已存在
 			if n.store != nil {
 				has, err := n.store.HasFinding(ctx, key)
@@ -654,19 +779,19 @@ func (n *ReportNode) analyzeFindings(ctx context.Context, state *State) {
 			// 收集待分析的错误
 			pendingAnalyses = append(pendingAnalyses, pendingAnalysis{
 				key: key,
-				pod: pod,
+				pod: podInfo,
 				errorContext: ErrorContext{
-					PodName:   pod.Name,
-					Namespace: pod.Namespace,
-					Status:    pod.Status,
-					Restarts:  pod.Restarts,
-					Logs:      n.extractPodLogs(state, pod.Name),
-					Events:    n.extractPodEvents(state, pod.Name),
+					PodName:   podInfo.Name,
+					Namespace: podInfo.Namespace,
+					Status:    podInfo.Status,
+					Restarts:  podInfo.Restarts,
+					Logs:      n.extractPodLogs(state, podInfo.Name),
+					Events:    n.extractPodEvents(state, podInfo.Name),
 				},
 			})
 
 		case "Pending":
-			key := fmt.Sprintf("finding:%s:%s:%s", state.K8sInfo.Namespace, pod.Name, "Pending")
+			key := fmt.Sprintf("finding:%s:%s:%s", state.K8sInfo.Namespace, podInfo.Name, "Pending")
 			if n.store != nil {
 				has, err := n.store.HasFinding(ctx, key)
 				if err != nil {
@@ -677,12 +802,12 @@ func (n *ReportNode) analyzeFindings(ctx context.Context, state *State) {
 					continue
 				}
 			}
-			state.AddFinding("Medium", pod.Name, "Pod 处于 Pending 状态")
+			state.AddFinding("Medium", podInfo.Name, "Pod 处于 Pending 状态")
 			n.saveFinding(ctx, key)
 		}
 
-		if pod.Restarts > 3 {
-			key := fmt.Sprintf("finding:%s:%s:high_restarts", state.K8sInfo.Namespace, pod.Name)
+		if podInfo.Restarts > 3 {
+			key := fmt.Sprintf("finding:%s:%s:high_restarts", state.K8sInfo.Namespace, podInfo.Name)
 			if n.store != nil {
 				has, err := n.store.HasFinding(ctx, key)
 				if err != nil {
@@ -693,7 +818,7 @@ func (n *ReportNode) analyzeFindings(ctx context.Context, state *State) {
 					continue
 				}
 			}
-			state.AddFinding("Medium", pod.Name, fmt.Sprintf("Pod 重启次数过高: %d", pod.Restarts))
+			state.AddFinding("Medium", podInfo.Name, fmt.Sprintf("Pod 重启次数过高: %d", podInfo.Restarts))
 			n.saveFinding(ctx, key)
 		}
 	}
@@ -794,12 +919,17 @@ func (n *ReportNode) analyzeFindings(ctx context.Context, state *State) {
 }
 
 // extractPodLogs 提取 Pod 的日志
-// 优先从 state.K8sInfo.Logs 中获取，如果未找到则从 ExecutedCommands 中搜索
+// 优先从 state.K8sInfo.Resources["Logs"] 中获取，如果未找到则从 ExecutedCommands 中搜索
 func (n *ReportNode) extractPodLogs(state *State, podName string) string {
-	// 首先从 K8sInfo.Logs 中查找
-	for _, log := range state.K8sInfo.Logs {
-		if log.PodName == podName {
-			return log.Message
+	// 首先从 Resources["Logs"] 中查找
+	logs := state.K8sInfo.Resources["Logs"]
+	for _, log := range logs {
+		logInfo, ok := log.(LogInfo)
+		if !ok {
+			continue
+		}
+		if logInfo.PodName == podName {
+			return logInfo.Message
 		}
 	}
 

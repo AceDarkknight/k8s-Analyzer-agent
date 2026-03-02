@@ -140,6 +140,10 @@ func Sync() error {
 	if globalLogger != nil {
 		err = globalLogger.Sync()
 	}
+	if sugarLogger != nil {
+		err = sugarLogger.Sync()
+	}
+
 	if lumberjackSink != nil {
 		lumberjackSink.Close()
 		lumberjackSink = nil

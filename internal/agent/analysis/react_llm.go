@@ -1,5 +1,5 @@
 // Package analysis 提供 ReAct LLM 实现
-// 基于 Eino ReAct Agent 构建，支持动态工具调用
+// 基于 Eino ReAct Agent，支持动态工具调用
 package analysis
 
 import (
@@ -20,7 +20,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// ReActLLM 基于 Eino ReAct Agent 构建的分析器
+// ReActLLM 基于 Eino ReAct Agent
 // 支持动态工具调用，可以主动调查问题
 type ReActLLM struct {
 	agent            *react.Agent
@@ -35,27 +35,27 @@ type ReActLLM struct {
 }
 
 // NewReActLLM 创建新的 ReActLLM
-// 使用 Eino ReAct Agent 构建，支持动态工具调用
+// 使用 Eino ReAct Agent，支持动态工具调用
 func NewReActLLM(ctx context.Context, k8sClient K8sClient, safetyAgent SafetyAgent, llmConfig *config.LLMConfig) (*ReActLLM, error) {
 	logger.Info("[ReActLLM] Initializing ReAct LLM",
 		logger.String("model", llmConfig.Model),
 		logger.String("provider", llmConfig.Provider))
 
-	// 1. 创建 ChatModel
+	// 1. Create ChatModel
 	chatModel, err := createChatModel(ctx, llmConfig)
 	if err != nil {
 		logger.Error("[ReActLLM] Failed to create chat model", logger.Err(err))
 		return nil, fmt.Errorf("failed to create chat model: %w", err)
 	}
 
-	// 2. 封装 K8s 工具
+	// 2. Wrap K8s tools
 	k8sTools, err := WrapK8sTools(ctx, k8sClient)
 	if err != nil {
 		logger.Error("[ReActLLM] Failed to wrap K8s tools", logger.Err(err))
 		return nil, fmt.Errorf("failed to wrap K8s tools: %w", err)
 	}
 
-	// 3. 封装 SafetyAgent 工具
+	// 3. Wrap SafetyAgent tool
 	safetyTool := WrapSafetyAgent(safetyAgent)
 	allTools := append(k8sTools, safetyTool)
 
@@ -63,20 +63,20 @@ func NewReActLLM(ctx context.Context, k8sClient K8sClient, safetyAgent SafetyAge
 		logger.Int("k8s_tools", len(k8sTools)),
 		logger.Int("total_tools", len(allTools)))
 
-	// 4. 绑定工具到模型（使用 WithTools）
+	// 4. Bind tools to model (using WithTools)
 	toolCallingModel, err := chatModel.WithTools(convertToToolInfo(allTools))
 	if err != nil {
 		logger.Error("[ReActLLM] Failed to bind tools to model", logger.Err(err))
 		return nil, fmt.Errorf("failed to bind tools to model: %w", err)
 	}
 
-	// 5. 构建 ReAct Agent
+	// 5. Build ReAct agent
 	agent, err := react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: toolCallingModel,
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools: allTools,
 		},
-		MaxStep:         10, // 防止无限循环
+		MaxStep:         10, // Prevent infinite loops
 		MessageModifier: getReActMessageModifier(),
 	})
 	if err != nil {
@@ -99,38 +99,39 @@ func NewReActLLM(ctx context.Context, k8sClient K8sClient, safetyAgent SafetyAge
 
 // AnalyzeError 使用 ReAct Agent 分析错误上下文
 // 可以动态调用工具获取更多信息
-// 包含重试逻辑：最多重试 3 次，间隔分别为 1s, 2s, 4s
+// 包含重试逻辑：最多重试 3 次，延迟分别为 1s, 2s, 4s
 func (llm *ReActLLM) AnalyzeError(ctx context.Context, errorContext ErrorContext) (AnalysisResult, error) {
 	logger.Info("[ReActLLM] Analyzing error context",
 		logger.String("pod", errorContext.PodName),
 		logger.String("namespace", errorContext.Namespace),
 		logger.String("status", errorContext.Status))
 
-	// 添加诊断日志：检查模型配置
+	// Adding diagnostic log: check model configuration
 	logger.Debug("[ReActLLM] Model config for analysis",
 		logger.String("model", llm.config.Model),
 		logger.String("base_url", llm.config.BaseURL),
 		logger.String("has_api_key", fmt.Sprintf("%t", llm.config.APIKey != "")))
 
-	// 构建包含已收集数据的提示词
+	// Build prompt with collected data
 	prompt := buildReActPrompt(errorContext)
 
-	// 构造初始消息
+	// Construct initial message
 	message := schema.UserMessage(prompt)
 
 	logger.Debug("[ReActLLM] Starting ReAct agent generation",
 		logger.String("prompt_length", fmt.Sprintf("%d", len(prompt))))
 
-	// 记录 LLM 请求日志
+	// Record LLM request log
 	logger.Info("[ReActLLM] Request (AnalyzeError)",
 		logger.String("role", string(message.Role)),
 		logger.String("content", truncateForLog(prompt, 2000)))
 
-	// 重试配置
+	// Retry configuration
 	maxRetries := 3
-	retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+	retryDelays := []time.Duration{
+		1 * time.Second, 2 * time.Second, 4 * time.Second}
 
-	// 尝试生成，带重试
+	// Attempt generation, with retry
 	var finalMsg *schema.Message
 	var err error
 	for i := 0; i < maxRetries; i++ {
@@ -144,7 +145,7 @@ func (llm *ReActLLM) AnalyzeError(ctx context.Context, errorContext ErrorContext
 
 		finalMsg, err = llm.agent.Generate(ctx, []*schema.Message{message})
 		if err == nil {
-			// 记录 LLM 响应日志
+			// Record LLM response log
 			logLLMResponse("AnalyzeError", finalMsg)
 			break
 		}
@@ -160,108 +161,119 @@ func (llm *ReActLLM) AnalyzeError(ctx context.Context, errorContext ErrorContext
 		return AnalysisResult{}, err
 	}
 
-	// 解析响应为 AnalysisResult
+	// Parse response to AnalysisResult
 	return parseReActResponse(finalMsg.Content)
 }
 
 // MakeDecision 使用 LLM 根据当前状态做出决策
-// 通过 chatModel 分析状态并选择下一步行动
-func (llm *ReActLLM) MakeDecision(ctx context.Context, state *State) (Decision, error) {
+// 分析状态并选择下一个行动
+// 返回包含决策、推理和工具调用的 DecisionResult
+func (llm *ReActLLM) MakeDecision(ctx context.Context, state *State) (*DecisionResult, error) {
 	logger.Info("[ReActLLM] Making decision", logger.Int("iteration", state.IterationCount))
 
-	// 预检查1：如果上次动作是 "no_command"，说明 CommandGenerator 没有产生新的命令
-	// 直接返回报告决策，避免无效的 LLM 调用
-	if state.LastAction == "no_command" {
-		logger.Info("[ReActLLM] Last action was 'no_command', skipping LLM decision and returning report")
-		return DecisionReport, nil
-	}
-
-	// 预检查2：如果已达到最大迭代次数，强制生成报告以避免无限循环
-	// 使用 state.MaxIterations 作为限制（默认为10）
+	// Precheck: if max iterations reached, force report generation to avoid infinite loop
+	// Uses state.MaxIterations as limit (default 10)
 	if state.IterationCount >= state.MaxIterations {
 		logger.Info("[ReActLLM] Max iterations reached, forcing report generation",
 			logger.Int("iteration", state.IterationCount),
 			logger.Int("max", state.MaxIterations))
-		return DecisionReport, nil
+		return &DecisionResult{
+			Decision:  DecisionReport,
+			Reasoning: "已达最大迭代次数",
+			ToolCalls: nil,
+		}, nil
 	}
 
-	// 构建决策提示词
+	// Build decision prompt
 	prompt := buildDecisionPrompt(state)
 
-	// 构造消息
+	// Construct messages
 	messages := []*schema.Message{
 		schema.UserMessage(prompt),
 	}
 
-	// 记录 LLM 请求日志
-	logger.Info("[LLM] Request (MakeDecision)",
+	// Record LLM request log
+	logger.Info("[ReActLLM] Request (MakeDecision)",
 		logger.Int("message_count", len(messages)),
 		logger.String("content", truncateForLog(prompt, 2000)))
 
-	// 调用 LLM 生成决策
+	// Call LLM to generate decision
 	resp, err := llm.chatModel.Generate(ctx, messages)
 	if err != nil {
-		logger.Error("[ReActLLM] LLM decision generation failed", logger.Err(err))
-		// 降级到规则决策
-		return DecisionReport, nil
+		logger.Error("[ReActLLM] LLM决策生成失败", logger.Err(err))
+		// Fallback to rule-based decision
+		return &DecisionResult{
+			Decision:  DecisionReport,
+			Reasoning: "LLM调用失败，降级到报告决策",
+			ToolCalls: nil,
+		}, nil
 	}
 
-	// 记录 LLM 响应日志
+	// Record LLM response log
 	logLLMResponse("MakeDecision", resp)
 
-	// 解析响应获取决策
-	decision, err := parseDecisionResponse(resp.Content)
+	// Parse response to get decision
+	decisionResult, err := parseDecisionResponseToResult(resp.Content)
 	if err != nil {
 		logger.Warn("[ReActLLM] Failed to parse decision response, using default", logger.Err(err))
-		return DecisionReport, nil
+		return &DecisionResult{
+			Decision:  DecisionReport,
+			Reasoning: "解析决策响应失败，使用默认报告决策",
+			ToolCalls: nil,
+		}, nil
 	}
 
-	logger.Info("[ReActLLM] Decision made", logger.String("decision", string(decision)))
-	return decision, nil
+	logger.Info("[ReActLLM] Decision made", logger.String("decision", string(decisionResult.Decision)))
+	return decisionResult, nil
 }
 
-// Analyze 使用 ReAct Agent 进行深入分析
-// 将 State 转换为 ErrorContext 并调用 ReAct Agent 进行分析
+// Analyze 使用 ReAct Agent 进行深度分析
+// 将 State 转换为 ErrorContext 并使用 ReAct Agent 进行分析
 func (llm *ReActLLM) Analyze(ctx context.Context, state *State) (string, error) {
 	logger.Info("[ReActLLM] Performing deep analysis",
 		logger.Int("iteration", state.IterationCount),
-		logger.Int("pods", len(state.K8sInfo.Pods)))
+		logger.Int("pods", len(state.K8sInfo.Resources["Pods"])))
 
-	// 如果有错误 Pod，优先分析错误 Pod
-	for _, pod := range state.K8sInfo.Pods {
-		if pod.Status == "Error" || pod.Status == "CrashLoopBackOff" {
+	// If there are error pods, prioritize analyzing them
+	pods := state.K8sInfo.Resources["Pods"]
+	for _, pod := range pods {
+		podInfo, ok := pod.(PodInfo)
+		if !ok {
+			continue
+		}
+		if podInfo.Status == "Error" || podInfo.Status == "CrashLoopBackOff" {
 			errorContext := ErrorContext{
-				PodName:   pod.Name,
-				Namespace: pod.Namespace,
-				Status:    pod.Status,
-				Restarts:  pod.Restarts,
-				Logs:      extractPodLogs(state, pod.Name),
-				Events:    []string{}, // 事件需要通过工具获取
+				PodName:   podInfo.Name,
+				Namespace: podInfo.Namespace,
+				Status:    podInfo.Status,
+				Restarts:  podInfo.Restarts,
+				Logs:      extractPodLogs(state, podInfo.Name),
+				Events:    []string{}, // Events need to be obtained through tools
 			}
 
-			// 调用 AnalyzeError 进行深入分析
+			// Call AnalyzeError for deep analysis
 			analysisResult, err := llm.AnalyzeError(ctx, errorContext)
 			if err != nil {
 				logger.Warn("[ReActLLM] Deep analysis failed", logger.Err(err))
 				continue
 			}
 
-			// 返回分析结果的字符串形式
+			// Return the analysis result as a string
 			return formatAnalysisResult(analysisResult), nil
 		}
 	}
 
-	// 如果没有错误 Pod，对整个状态进行分析
+	// If no error pods, analyze the whole state
 	errorContext := ErrorContext{
 		PodName:   "general",
 		Namespace: state.K8sInfo.Namespace,
 		Status:    "analyzing",
 		Restarts:  0,
 		Logs:      "",
-		Events:    []string{}, // 事件需要通过工具获取
+		Events:    []string{}, // Events need to be obtained through tools
 	}
 
-	// 调用 AnalyzeError 进行分析
+	// Call AnalyzeError for analysis
 	analysisResult, err := llm.AnalyzeError(ctx, errorContext)
 	if err != nil {
 		logger.Warn("[ReActLLM] General analysis failed", logger.Err(err))
@@ -272,17 +284,17 @@ func (llm *ReActLLM) Analyze(ctx context.Context, state *State) (string, error) 
 }
 
 // GenerateReport 生成 Markdown 格式的分析报告
-// 整合 state.AnalysisResult 中的发现和建议
+// 集成 state.AnalysisResult 中的发现和建议
 func (llm *ReActLLM) GenerateReport(ctx context.Context, state *State) (string, error) {
 	logger.Info("[ReActLLM] Generating report",
 		logger.Int("findings", len(state.AnalysisResult.Findings)),
 		logger.Int("recommendations", len(state.AnalysisResult.Recommendations)))
 
-	// 构建基础报告
+	// Build base report
 	report := buildBasicReport(state)
 
-	// 可选：使用 LLM 优化报告内容
-	// 如果有足够的发现和建议，可以调用 LLM 进行润色
+	// Optional: Use LLM to polish report content
+	// If there are enough findings and recommendations, call LLM for refinement
 	if len(state.AnalysisResult.Findings) > 0 || len(state.AnalysisResult.Recommendations) > 0 {
 		polishedReport, err := llm.polishReport(ctx, report, state)
 		if err != nil {
@@ -295,22 +307,119 @@ func (llm *ReActLLM) GenerateReport(ctx context.Context, state *State) (string, 
 	return report, nil
 }
 
-// SetTools 实现 LLM 接口（无操作，因为 ReActLLM 初始化时已设置工具）
+// SetTools implements LLM interface (no operation, because ReActLLM is initialized with tools)
 func (llm *ReActLLM) SetTools(tools []client.Tool) {
-	// ReActLLM 在初始化时已经设置了工具，这里不需要处理
+	// ReActLLM is initialized with tools, so this is a no-op
 	logger.Debug("[ReActLLM] SetTools called but ignored (tools set at initialization)")
 }
 
-// createChatModel 创建 ChatModel
+// SynthesizeReport 生成高质量的综合报告
+// 使用结构化 Prompt 根据用户输入、发现的问题、执行的命令和 K8s 资源摘要生成报告
+func (llm *ReActLLM) SynthesizeReport(ctx context.Context, userInput string, findings []Finding, commands []CommandExecution, k8sSummary string) (string, error) {
+	logger.Info("[ReActLLM] Synthesizing report",
+		logger.String("userInput", userInput),
+		logger.Int("findings", len(findings)),
+		logger.Int("commands", len(commands)))
+
+	// 构建结构化 Prompt，使用计划文档 4.2.3 节中的模板
+	prompt := buildSynthesizePrompt(userInput, findings, commands, k8sSummary)
+
+	// 构造消息
+	messages := []*schema.Message{
+		(schema.UserMessage)(prompt),
+	}
+
+	// 记录 LLM 请求日志
+	logger.Info("[ReActLLM] Request (SynthesizeReport)",
+		logger.Int("message_count", len(messages)),
+		logger.String("content", truncateForLog(prompt, 2000)))
+
+	// 调用 LLM 生成报告
+	resp, err := llm.chatModel.Generate(ctx, messages)
+	if err != nil {
+		logger.Error("[ReActLLM] SynthesizeReport failed", logger.Err(err))
+		return "", err
+	}
+
+	// 记录 LLM 响应日志
+	logLLMResponse("SynthesizeReport", resp)
+
+	return resp.Content, nil
+}
+
+// buildSynthesizePrompt 构建用于生成综合报告的结构化 Prompt
+// 使用计划文档 4.2.3 节中的模板
+func buildSynthesizePrompt(userInput string, findings []Finding, commands []CommandExecution, k8sSummary string) string {
+	var sb strings.Builder
+
+	// Role
+	sb.WriteString("# Role\n")
+	sb.WriteString("你是一个资深的 Kubernetes 运维专家，负责根据排查过程生成最终诊断报告。\n\n")
+
+	// Input Data
+	sb.WriteString("# Input Data\n")
+
+	// 用户原始查询
+	sb.WriteString(fmt.Sprintf("- 用户原始查询: %s\n", userInput))
+
+	// 关键发现 (Findings)
+	sb.WriteString("- 关键发现 (Findings):\n")
+	if len(findings) > 0 {
+		for _, f := range findings {
+			sb.WriteString(fmt.Sprintf("  - [%s] %s: %s (时间: %s)\n",
+				f.Severity, f.Resource, f.Message, f.Timestamp.Format("2006-01-02 15:04:05")))
+		}
+	} else {
+		sb.WriteString("  - 无发现\n")
+	}
+
+	// 核心执行步骤 (Filtered Commands)
+	sb.WriteString("- 核心执行步骤 (Filtered Commands):\n")
+	if len(commands) > 0 {
+		// 只显示成功的命令或关键的失败命令
+		for _, cmd := range commands {
+			status := "成功"
+			if !cmd.Success {
+				status = "失败"
+			}
+			sb.WriteString(fmt.Sprintf("  - [%s] %s\n", status, cmd.Command))
+			if cmd.Output != "" && len(cmd.Output) < 200 {
+				sb.WriteString(fmt.Sprintf("    输出: %s\n", cmd.Output))
+			}
+		}
+	} else {
+		sb.WriteString("  - 无执行命令\n")
+	}
+
+	// 资源状态摘要
+	sb.WriteString(fmt.Sprintf("- 资源状态摘要: %s\n\n", k8sSummary))
+
+	// Output Format (Strict Markdown)
+	sb.WriteString("# Output Format (Strict Markdown)\n")
+	sb.WriteString("请按以下结构输出报告：\n\n")
+
+	sb.WriteString("## 1. Summary (执行摘要)\n")
+	sb.WriteString("[一句话总结诊断结论，说明问题是否已解决或定位到根因]\n\n")
+
+	sb.WriteString("## 2. Findings (详细发现)\n")
+	sb.WriteString("[按严重程度(Critical/High/Medium)列出所有技术发现，需引用具体的资源名称和错误信息]\n\n")
+
+	sb.WriteString("## 3. Recommendations (修复建议)\n")
+	sb.WriteString("[列出具体的、可执行的建议。如果有具体的修复命令（如 kubectl patch/edit），请提供代码块]\n")
+
+	return sb.String()
+}
+
+// createChatModel creates ChatModel
 func createChatModel(ctx context.Context, llmConfig *config.LLMConfig) (*openai.ChatModel, error) {
-	// 添加诊断日志：检查传入的配置
+	// Adding diagnostic log: check the provided configuration
 	logger.Debug("[ReActLLM] Creating chat model",
 		logger.String("model", llmConfig.Model),
 		logger.String("base_url", llmConfig.BaseURL),
 		logger.String("provider", llmConfig.Provider),
 		logger.String("has_api_key", fmt.Sprintf("%t", llmConfig.APIKey != "")))
 
-	// 使用 eino-ext 的 openai ChatModel
+	// Use eino-ext's openai ChatModel
 	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		Model:   llmConfig.Model,
 		APIKey:  llmConfig.APIKey,
@@ -348,26 +457,46 @@ func getReActSystemPrompt() string {
 	return `你是一个 Kubernetes 故障排查专家。
 
 ## 动态获取数据模式
-你采用动态获取数据的模式进行分析。初始阶段只会收集基础的 Pod 和 Deployment 信息。
+你采用动态获取数据的模式进行分析。初始阶段只会收集基础的 Pod 信息。
 如果你需要更多信息（如 Services、Events、Logs、ConfigMaps 等），请使用可用的工具主动获取。
 
-## 可用工具
-你可以使用以下工具来获取所需信息：
-- list_services: 列出 Service 信息
-- get_events: 获取集群事件
-- list_pods: 列出 Pod 信息
-- get_pod_logs: 获取 Pod 日志
-- list_configmaps: 列出 ConfigMap 信息
-- 以及其他可用工具
+## 工具使用规范（重要）
+你必须严格遵守以下规则来调用工具：
+
+1. **严格遵循 JSON Schema**: 每个工具都有对应的 JSON Schema 定义参数格式。你必须严格按照该 Schema 提供参数。
+2. **始终检查当前可用工具列表**: 每次调用工具前，请查看系统提供的工具列表，使用准确的工具名称。
+3. **不要猜测工具名称或参数键**: 不同工具的参数名称可能不同（例如 pod_name vs name，namespace vs ns）。必须根据 Schema 中定义的参数名称来提供参数。
+4. **参数名称和必填字段必须与 Schema 完全匹配**: 在调用工具前，请仔细阅读工具的 Schema，确保所有必填参数都已提供，且参数名称完全正确。
+5. **错误处理和重试策略**: 如果工具调用返回错误或空结果，请分析原因（例如工具不存在、权限不足或参数错误），并尝试使用不同的工具或调整参数再次尝试，不要陷入重复调用同一错误命令的死循环。
+
+## 输出格式要求
+你的响应必须严格遵守以下 JSON Schema：
+{
+  "thought": "分析当前情况、历史记录并决定下一步行动的推理过程。",
+  "decision": "continue" 或 "report",
+  "tool_calls": [
+    {
+      "name": "工具名称（必须与可用工具列表中的名称完全一致）",
+      "arguments": {
+        // 参数必须严格遵循工具的 JSON Schema 定义
+      }
+    }
+  ]
+}
+
+## 决策规则
+- decision 为 "continue" 时：需要调用工具获取更多信息
+- decision 为 "report" 时：已收集足够信息，可以生成分析报告
+- tool_calls：列出需要执行的工具调用（仅当 decision 为 "continue" 时需要）
+- 避免重复调用已执行过的工具，参考推理历史做出决策
 
 ## 分析要求
 1. 首先分析已提供的基础数据
-2. 如果需要更多信息（Services、Events 等），使用工具主动获取
+2. 如果需要更多信息，使用工具主动获取（必须根据 Schema 提供正确参数）
 3. 如果已有足够信息进行诊断，直接提供分析结果
-4. 最终回复必须是符合以下 JSON 格式的分析结果：
+4. 最终回复必须是符合上述 JSON 格式的分析结果：
    - findings: 发现的问题列表，每个问题包含 severity(严重程度), resource(资源名称), message(问题描述)
    - recommendations: 建议列表，每个建议包含 action(操作), reason(原因), priority(优先级), command(可选的修复命令)
-
 ## 输出格式
 请以 JSON 格式输出最终分析结果，例如：
 {
@@ -386,14 +515,14 @@ func buildReActPrompt(errorContext ErrorContext) string {
 
 	sb.WriteString("请分析以下 Pod 错误：\n\n")
 
-	// 添加 Pod 信息
+	// Add Pod information
 	sb.WriteString("**Pod 信息**:\n")
 	sb.WriteString(fmt.Sprintf("- Pod 名称: %s\n", errorContext.PodName))
 	sb.WriteString(fmt.Sprintf("- 命名空间: %s\n", errorContext.Namespace))
 	sb.WriteString(fmt.Sprintf("- 状态: %s\n", errorContext.Status))
 	sb.WriteString(fmt.Sprintf("- 重启次数: %d\n\n", errorContext.Restarts))
 
-	// 添加日志信息
+	// Add log information
 	sb.WriteString("**Pod 日志**:\n")
 	if errorContext.Logs != "" {
 		sb.WriteString("```\n")
@@ -403,7 +532,7 @@ func buildReActPrompt(errorContext ErrorContext) string {
 		sb.WriteString("*无可用日志*\n\n")
 	}
 
-	// 添加事件信息
+	// Add event information
 	sb.WriteString("**相关事件**:\n")
 	if len(errorContext.Events) > 0 {
 		for _, event := range errorContext.Events {
@@ -418,15 +547,15 @@ func buildReActPrompt(errorContext ErrorContext) string {
 	return sb.String()
 }
 
-// parseReActResponse 解析 ReAct Agent 的响应
+// parseReActResponse parses ReAct Agent's response
 func parseReActResponse(content string) (AnalysisResult, error) {
-	// 1. 提取 JSON 内容（处理可能的 Markdown 代码块标记）
+	// 1. Extract JSON content (handling possible Markdown code block markers)
 	jsonContent := extractJSON(content)
 
-	// 2. 解析 JSON
+	// 2. Parse JSON
 	var result AnalysisResult
 	if err := json.Unmarshal([]byte(jsonContent), &result); err != nil {
-		// 如果解析失败，尝试构建一个基本的错误结果
+		// If parsing fails, try to build a basic error result
 		logger.Warn("[ReActLLM] Failed to parse analysis result JSON",
 			logger.Err(err),
 			logger.String("content", content))
@@ -445,17 +574,17 @@ func parseReActResponse(content string) (AnalysisResult, error) {
 	return result, nil
 }
 
-// extractJSON 从字符串中提取 JSON 部分
+// extractJSON extracts JSON portion from a string
 func extractJSON(s string) string {
-	// 尝试查找 JSON 块的开始和结束
-	// 支持 ```json ... ``` 格式
+	// Try to find JSON block start and end
+	// Supports ```json ... ``` format
 	start := strings.Index(s, "{")
 	end := strings.LastIndex(s, "}")
 	if start != -1 && end != -1 && end > start {
 		return s[start : end+1]
 	}
 
-	// 尝试查找数组格式
+	// Try to find array format
 	start = strings.Index(s, "[")
 	end = strings.LastIndex(s, "]")
 	if start != -1 && end != -1 && end > start {
@@ -466,31 +595,62 @@ func extractJSON(s string) string {
 }
 
 // buildDecisionPrompt 构建决策提示词
-// 描述当前状态并要求 LLM 选择下一步行动
+// 描述当前状态并要求 LLM 选择下一个行动
+// 使用计划文档第 5 节中定义的模板格式
 func buildDecisionPrompt(state *State) string {
 	var sb strings.Builder
 
-	sb.WriteString("你是一个 Kubernetes 集群诊断决策专家。根据当前收集的信息，你需要决定下一步的行动。\n\n")
+	// Add system role description
+	sb.WriteString("你是一个 Kubernetes 诊断代理。你将收到当前状态和你之前的行动历史。根据此历史记录做出下一个决定，以避免循环和冗余检查。\n\n")
 
-	// 当前迭代信息
-	sb.WriteString("## 当前状态\n")
-	sb.WriteString(fmt.Sprintf("- 迭代次数: %d/%d\n", state.IterationCount, state.MaxIterations))
-	sb.WriteString(fmt.Sprintf("- 用户查询: %s\n\n", state.UserInput))
+	// Context section
+	sb.WriteString("## 上下文\n")
+	sb.WriteString(fmt.Sprintf("用户查询: %s\n\n", state.UserInput))
 
-	// 已收集的资源信息
-	sb.WriteString("## 已收集的资源\n")
-	sb.WriteString(fmt.Sprintf("- Pod 数量: %d\n", len(state.K8sInfo.Pods)))
-	sb.WriteString(fmt.Sprintf("- Deployment 数量: %d\n", len(state.K8sInfo.Deployments)))
-	sb.WriteString(fmt.Sprintf("- 已执行命令: %d\n\n", len(state.AnalysisResult.ExecutedCommands)))
+	// Reasoning history section - using the template format in the plan document
+	sb.WriteString("## 推理历史 (Reasoning History)\n")
+	if len(state.ReasoningHistory) > 0 {
+		for _, step := range state.ReasoningHistory {
+			sb.WriteString(fmt.Sprintf("步骤 %d:\n", step.Iteration))
+			sb.WriteString(fmt.Sprintf("思考: %s\n", step.Thought))
+			sb.WriteString(fmt.Sprintf("决策: %s\n", step.Decision))
+			if len(step.ToolCalls) > 0 {
+				sb.WriteString("工具调用: ")
+				for _, tc := range step.ToolCalls {
+					sb.WriteString(fmt.Sprintf("%s ", tc.Tool))
+				}
+				sb.WriteString("\n")
+			}
+			if step.Observation != "" {
+				// 检查观察结果是否包含错误关键字，如果是则突出显示
+				lowerObs := strings.ToLower(step.Observation)
+				if strings.Contains(lowerObs, "error") || strings.Contains(lowerObs, "failed") || strings.Contains(lowerObs, "失败") || strings.Contains(lowerObs, "错误") {
+					sb.WriteString(fmt.Sprintf("观察结果: ⚠️ %s\n", step.Observation))
+				} else {
+					sb.WriteString(fmt.Sprintf("观察结果: %s\n", step.Observation))
+				}
+			}
+			sb.WriteString("\n")
+		}
+	} else {
+		sb.WriteString("*这是第一次迭代，没有推理历史*\n\n")
+	}
 
-	// 当前问题
-	sb.WriteString("## 当前问题\n")
+	// Current resource section
+	sb.WriteString("## 当前资源\n")
+	sb.WriteString(fmt.Sprintf("Pods: %d\n", len(state.K8sInfo.Resources["Pods"])))
+	sb.WriteString(fmt.Sprintf("Deployments: %d\n", len(state.K8sInfo.Resources["Deployments"])))
+	sb.WriteString(fmt.Sprintf("当前迭代: %d/%d\n\n", state.IterationCount, state.MaxIterations))
 
-	// 检查异常 Pod
+	// Abnormal pod information
 	var abnormalPods []string
-	for _, pod := range state.K8sInfo.Pods {
-		if pod.Status == "Error" || pod.Status == "CrashLoopBackOff" || pod.Status == "Pending" {
-			abnormalPods = append(abnormalPods, fmt.Sprintf("%s (%s, 重启: %d)", pod.Name, pod.Status, pod.Restarts))
+	for _, pod := range state.K8sInfo.Resources["Pods"] {
+		podInfo, ok := pod.(PodInfo)
+		if !ok {
+			continue
+		}
+		if podInfo.Status == "Error" || podInfo.Status == "CrashLoopBackOff" || podInfo.Status == "Pending" {
+			abnormalPods = append(abnormalPods, fmt.Sprintf("%s (%s, 重启: %d)", podInfo.Name, podInfo.Status, podInfo.Restarts))
 		}
 	}
 	if len(abnormalPods) > 0 {
@@ -498,28 +658,38 @@ func buildDecisionPrompt(state *State) string {
 		for _, p := range abnormalPods {
 			sb.WriteString(fmt.Sprintf("- %s\n", p))
 		}
-	} else {
-		sb.WriteString("- 无明显异常 Pod\n")
+		sb.WriteString("\n")
 	}
 
-	sb.WriteString("\n## 决策选项\n")
-	sb.WriteString("请根据当前状态选择以下一种决策：\n")
-	sb.WriteString("- `report`: 已收集足够信息，生成分析报告\n")
-	sb.WriteString("- `deep_query`: 需要进一步查询更多信息（如果需要获取 Services 或 Events 信息，请使用 list_services 或 get_events 工具）\n")
-	sb.WriteString("- `continue`: 继续当前操作\n\n")
+	// Task section - clearly require JSON output
+	sb.WriteString("## 任务\n")
+	sb.WriteString("决定下一步。返回一个 JSON 对象，必须严格遵守以下 Schema:\n")
+	sb.WriteString("```json\n")
+	sb.WriteString("{\n")
+	sb.WriteString("  \"thought\": \"分析当前情况、历史记录并决定下一步行动的推理过程。如果之前的命令执行失败，请在 thought 中分析失败原因，并在 tool_calls 中提出替代方案或修复后的命令。\",\n")
+	sb.WriteString("  \"decision\": \"continue\" | \"report\",\n")
+	sb.WriteString("  \"tool_calls\": [ { \"name\": \"...\", \"arguments\": { ... } } ]\n")
+	sb.WriteString("}\n")
+	sb.WriteString("```\n\n")
 
-	sb.WriteString("请只输出一个决策选项（report/deep_query/continue），不要输出其他内容。\n")
+	// Additional explanation
+	sb.WriteString("## 决策说明\n")
+	sb.WriteString("- continue: 需要继续调查或调用工具获取更多信息\n")
+	sb.WriteString("- report: 已收集足够信息，可以生成分析报告\n")
+	sb.WriteString("- tool_calls: 如果 decision 是 continue，列出需要执行的工具调用\n")
+	sb.WriteString("- 可用的 K8s 工具包括: list_pods, get_pod_logs, list_events, list_services 等\n")
+	sb.WriteString("- 如需执行非 K8s 操作（如网络探测），可使用: execute_safe_command\n")
 
 	return sb.String()
 }
 
-// parseDecisionResponse 解析 LLM 返回的决策响应
+// parseDecisionResponse parses LLM's decision response
 func parseDecisionResponse(content string) (Decision, error) {
-	// 清理响应内容
+	// Clean response content
 	content = strings.TrimSpace(content)
 	content = strings.ToLower(content)
 
-	// 提取决策
+	// Extract decision
 	if strings.Contains(content, "report") {
 		return DecisionReport, nil
 	}
@@ -530,15 +700,101 @@ func parseDecisionResponse(content string) (Decision, error) {
 		return DecisionContinue, nil
 	}
 
-	// 默认返回报告决策
+	// Default to report decision
 	return DecisionReport, nil
+}
+
+// parseDecisionResponseToResult parses LLM's decision response to DecisionResult
+// Parses JSON formatted response, extracts thought, decision, tool_calls
+func parseDecisionResponseToResult(content string) (*DecisionResult, error) {
+	// Extract JSON content (handling possible Markdown code block markers)
+	jsonContent := extractJSON(content)
+
+	// Define intermediate structure for JSON parsing
+	var rawResponse struct {
+		Thought   string `json:"thought"`
+		Decision  string `json:"decision"`
+		ToolCalls []struct {
+			Name      string                 `json:"name"`
+			Arguments map[string]interface{} `json:"arguments"`
+		} `json:"tool_calls"`
+	}
+
+	// Try to unmarshal JSON
+	if err := json.Unmarshal([]byte(jsonContent), &rawResponse); err != nil {
+		logger.Warn("[ReActLLM] Failed to parse JSON response, falling back to text parsing",
+			logger.Err(err))
+
+		// JSON parsing failed, fallback to text matching
+		decision, err := parseDecisionResponse(content)
+		if err != nil {
+			return nil, err
+		}
+
+		return &DecisionResult{
+			Decision:  decision,
+			Reasoning: "JSON 解析失败，使用文本匹配",
+			ToolCalls: nil,
+		}, nil
+	}
+
+	// Parse decision
+	decision := parseDecisionString(rawResponse.Decision)
+
+	// Convert tool calls
+	var toolCalls []ToolCall
+	for _, tc := range rawResponse.ToolCalls {
+		toolCalls = append(toolCalls, ToolCall{
+			Tool: tc.Name,
+			Args: tc.Arguments,
+			Type: "k8s", // Default type
+		})
+	}
+
+	// Build return result
+	result := &DecisionResult{
+		Decision:  decision,
+		Reasoning: rawResponse.Thought,
+		ToolCalls: toolCalls,
+	}
+
+	logger.Debug("[ReActLLM] Parsed decision result",
+		logger.String("decision", string(result.Decision)),
+		logger.String("thought", truncateForLog(result.Reasoning, 200)),
+		logger.Int("tool_calls", len(result.ToolCalls)))
+
+	return result, nil
+}
+
+// parseDecisionString 解析决策字符串
+// 处理各种可能的决策值
+func parseDecisionString(decisionStr string) Decision {
+	decisionStr = strings.ToLower(strings.TrimSpace(decisionStr))
+
+	if decisionStr == "report" {
+		return DecisionReport
+	}
+	if decisionStr == "continue" {
+		return DecisionContinue
+	}
+	if decisionStr == "deep_query" || decisionStr == "deep" {
+		return DecisionDeepQuery
+	}
+
+	// Default to report decision
+	return DecisionReport
 }
 
 // extractPodLogs 提取指定 Pod 的日志
 func extractPodLogs(state *State, podName string) string {
-	for _, log := range state.K8sInfo.Logs {
-		if log.PodName == podName {
-			return log.Message
+	logs := state.K8sInfo.Resources["Logs"]
+	for _, log := range logs {
+		logInfo, ok := log.(LogInfo)
+		if !ok {
+			continue
+		}
+		if logInfo.PodName == podName {
+			return logInfo.Message
 		}
 	}
 	return ""
@@ -550,7 +806,7 @@ func formatAnalysisResult(result AnalysisResult) string {
 
 	sb.WriteString("## 分析结果\n\n")
 
-	// 发现的问题
+	// Found issues
 	if len(result.Findings) > 0 {
 		sb.WriteString("### 发现的问题\n")
 		for _, finding := range result.Findings {
@@ -559,7 +815,7 @@ func formatAnalysisResult(result AnalysisResult) string {
 		sb.WriteString("\n")
 	}
 
-	// 建议
+	// Recommendations
 	if len(result.Recommendations) > 0 {
 		sb.WriteString("### 建议\n")
 		for _, rec := range result.Recommendations {
@@ -574,25 +830,25 @@ func formatAnalysisResult(result AnalysisResult) string {
 	return sb.String()
 }
 
-// buildBasicReport 构建基础 Markdown 报告
+// buildBasicReport constructs a basic Markdown report
 func buildBasicReport(state *State) string {
 	var sb strings.Builder
 
 	sb.WriteString("# Kubernetes 集群分析报告\n\n")
 
-	// 基本信息
+	// Basic information
 	sb.WriteString("## 基本信息\n\n")
 	sb.WriteString(fmt.Sprintf("- **用户查询**: %s\n", state.UserInput))
 	sb.WriteString(fmt.Sprintf("- **命名空间**: %s\n", state.K8sInfo.Namespace))
 	sb.WriteString(fmt.Sprintf("- **迭代次数**: %d/%d\n\n", state.IterationCount, state.MaxIterations))
 
-	// 资源统计
+	// Resource statistics
 	sb.WriteString("## 资源统计\n\n")
-	sb.WriteString(fmt.Sprintf("- Pod 数量: %d\n", len(state.K8sInfo.Pods)))
-	sb.WriteString(fmt.Sprintf("- Deployment 数量: %d\n", len(state.K8sInfo.Deployments)))
+	sb.WriteString(fmt.Sprintf("- Pod 数量: %d\n", len(state.K8sInfo.Resources["Pods"])))
+	sb.WriteString(fmt.Sprintf("- Deployment 数量: %d\n", len(state.K8sInfo.Resources["Deployments"])))
 	sb.WriteString(fmt.Sprintf("- 已执行命令: %d\n\n", len(state.AnalysisResult.ExecutedCommands)))
 
-	// 发现的问题
+	// Found issues
 	sb.WriteString("## 发现的问题\n\n")
 	if len(state.AnalysisResult.Findings) > 0 {
 		for _, finding := range state.AnalysisResult.Findings {
@@ -605,7 +861,7 @@ func buildBasicReport(state *State) string {
 		sb.WriteString("*未发现明显问题*\n\n")
 	}
 
-	// 建议
+	// Recommendations
 	sb.WriteString("## 建议\n\n")
 	if len(state.AnalysisResult.Recommendations) > 0 {
 		for i, rec := range state.AnalysisResult.Recommendations {
@@ -621,7 +877,7 @@ func buildBasicReport(state *State) string {
 		sb.WriteString("*暂无建议*\n\n")
 	}
 
-	// 执行命令历史
+	// Command execution history
 	if len(state.AnalysisResult.ExecutedCommands) > 0 {
 		sb.WriteString("## 执行命令历史\n\n")
 		for _, cmd := range state.AnalysisResult.ExecutedCommands {
@@ -641,7 +897,7 @@ func buildBasicReport(state *State) string {
 }
 
 // polishReport 使用 LLM 优化报告内容
-// 对已格式化的报告进行润色和改进
+// 优化已经格式化好的报告
 func (llm *ReActLLM) polishReport(ctx context.Context, basicReport string, state *State) (string, error) {
 	var sb strings.Builder
 
@@ -652,12 +908,12 @@ func (llm *ReActLLM) polishReport(ctx context.Context, basicReport string, state
 
 	prompt := sb.String()
 
-	// 调用 LLM 生成优化后的报告
+	// Call LLM to generate the polished report
 	messages := []*schema.Message{
 		schema.UserMessage(prompt),
 	}
 
-	// 记录 LLM 请求日志
+	// Record LLM request log
 	logger.Info("[ReActLLM] Request (polishReport)",
 		logger.Int("message_count", len(messages)),
 		logger.String("content", truncateForLog(prompt, 2000)))
@@ -668,27 +924,27 @@ func (llm *ReActLLM) polishReport(ctx context.Context, basicReport string, state
 		return "", err
 	}
 
-	// 记录 LLM 响应日志
+	// Record LLM response log
 	logLLMResponse("polishReport", resp)
 
 	return resp.Content, nil
 }
 
 // logLLMResponse 记录 LLM 响应日志
-// 包含主内容和推理内容（如果有）
+// 包括主要内容和推理内容（如果有）
 func logLLMResponse(methodName string, msg *schema.Message) {
 	if msg == nil {
 		logger.Warn("[ReActLLM] Response is nil", logger.String("method", methodName))
 		return
 	}
 
-	// 记录主内容
+	// Record main content
 	content := msg.Content
 	if content == "" {
 		content = "<empty>"
 	}
 
-	// 检查是否有推理/思考内容
+	// Check for reasoning/thought content
 	reasoning := ""
 	if msg.ReasoningContent != "" {
 		reasoning = msg.ReasoningContent
@@ -705,7 +961,7 @@ func logLLMResponse(methodName string, msg *schema.Message) {
 }
 
 // truncateForLog 截断日志内容，避免过长
-// 如果内容超过 maxLength，会截断并添加省略提示
+// 如果内容超过 maxLength，将被截断并添加截断提示
 func truncateForLog(content string, maxLength int) string {
 	if len(content) <= maxLength {
 		return content

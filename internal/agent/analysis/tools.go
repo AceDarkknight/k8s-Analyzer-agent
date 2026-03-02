@@ -12,6 +12,7 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+	"github.com/eino-contrib/jsonschema"
 )
 
 // WrapK8sTools 将 MCP 工具转换为 Eino 工具
@@ -52,12 +53,24 @@ type K8sToolAdapter struct {
 
 // Info 返回工具信息
 func (t *K8sToolAdapter) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	var paramsOneOf *schema.ParamsOneOf
+
+	// 解析 JSON Schema 字符串为 *jsonschema.Schema
+	if len(t.inputSchema) > 0 {
+		var js *jsonschema.Schema
+		if err := json.Unmarshal(t.inputSchema, &js); err != nil {
+			logger.Warn("[K8sToolAdapter] Failed to parse input schema JSON",
+				logger.String("tool", t.name),
+				logger.Err(err))
+		} else {
+			paramsOneOf = schema.NewParamsOneOfByJSONSchema(js)
+		}
+	}
+
 	return &schema.ToolInfo{
-		Name: t.name,
-		Desc: t.desc,
-		// ParamsOneOf 设置为 nil，让模型自行判断参数
-		// 如果需要更严格的参数验证，可以使用 schema.NewParamsOneOfByJSONSchema
-		ParamsOneOf: nil,
+		Name:        t.name,
+		Desc:        t.desc,
+		ParamsOneOf: paramsOneOf,
 	}, nil
 }
 
