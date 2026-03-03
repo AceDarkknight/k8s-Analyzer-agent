@@ -571,6 +571,9 @@ func (n *ActionNode) executeToolCall(ctx context.Context, state *State, toolCall
 			logger.Error("[ActionNode] SafetyAgent command execution failed",
 				logger.Err(err),
 				logger.String("command", command))
+			state.LastError = err
+			// 记录失败的命令
+			state.AddCommandExecution(command, err.Error(), false)
 			return "", err
 		}
 

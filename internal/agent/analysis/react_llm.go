@@ -397,15 +397,12 @@ func buildSynthesizePrompt(userInput string, findings []Finding, commands []Comm
 	// Output Format (Strict Markdown)
 	sb.WriteString("# Output Format (Strict Markdown)\n")
 	sb.WriteString("请按以下结构输出报告：\n\n")
-
-	sb.WriteString("## 1. Summary (执行摘要)\n")
-	sb.WriteString("[一句话总结诊断结论，说明问题是否已解决或定位到根因]\n\n")
-
 	sb.WriteString("## 2. Findings (详细发现)\n")
-	sb.WriteString("[按严重程度(Critical/High/Medium)列出所有技术发现，需引用具体的资源名称和错误信息]\n\n")
-
-	sb.WriteString("## 3. Recommendations (修复建议)\n")
-	sb.WriteString("[列出具体的、可执行的建议。如果有具体的修复命令（如 kubectl patch/edit），请提供代码块]\n")
+	sb.WriteString("[按严重程度(Critical/High/Medium)列出所有技术发现，需引用具体的资源名称和错误信息]\n")
+	sb.WriteString("**验证状态标注规则**：\n")
+	sb.WriteString("- 如果发现是基于成功执行的命令（CommandExecution.Success=true）得出的结论，标注为 ✅ Verified（已验证事实）\n")
+	sb.WriteString("- 如果发现仅基于 K8s MCP 工具数据或推测，标注为 ⚠️ Inferred（推测性发现）\n")
+	sb.WriteString("- 在每个发现后面加上验证状态标记，例如：- **[Critical] ✅ Verified** 或 **⚠️ Inferred**\n\n")
 
 	return sb.String()
 }
@@ -483,6 +480,39 @@ func getReActSystemPrompt() string {
     }
   ]
 }
+
+## 通用诊断协议（强制执行）
+你必须严格遵守以下诊断协议：
+
+### 1. 强制思维链 - 可验证性评估
+- 每次生成 "thought" 时，必须包含对"可验证性"的评估
+- 评估内容：你提出的分析结论或建议是否可以通过现有工具进行验证？
+- 如果可以验证，必须在下一步调用相应的验证工具
+- 如果无法验证（如缺少必要工具），请明确标注为"推测性发现"
+
+### 2. 降级探测指引（当 MCP 工具失败或信息不足时）
+采用以下分层降级策略：
+- **第一层：MCP 服务/工具调用** - 使用 K8s MCP 工具（如 list_pods, describe_pod, get_pod_logs）
+- **第二层：运行时探测** - 当 MCP 工具失败或返回错误时，使用容器运行时工具（docker/crictl）查看容器实体的存活状态与真实日志
+- **第三层：系统工具探测** - 当运行时探测也无法解决问题时，使用宿主机系统工具（ps, netstat, df, dmesg, ip, ss）
+
+**降级条件**：
+- MCP 服务不可用或返回错误
+- 状态显示为 Unknown
+- 权限问题导致无法获取信息
+- 信息不足以定位根因
+
+**降级路径示例**：
+步骤 1: 尝试 K8s MCP 工具调用
+↓ (若失败或信息不足)
+步骤 2: 降级到运行时探测 (docker/crictl logs)
+↓ (若仍无法解决)
+步骤 3: 降级到系统工具 (ps, netstat, df, dmesg)
+
+### 3. 修复即验证原则
+- 如果你计划提出修复建议 A，必须检索工具列表
+- 若存在能验证 A 是否生效的工具 B，必须执行 B 后才能生成报告
+- 禁止在有验证手段时提供仅基于推测的建议
 
 ## 决策规则
 - decision 为 "continue" 时：需要调用工具获取更多信息
@@ -663,7 +693,22 @@ func buildDecisionPrompt(state *State) string {
 
 	// Task section - clearly require JSON output
 	sb.WriteString("## 任务\n")
-	sb.WriteString("决定下一步。返回一个 JSON 对象，必须严格遵守以下 Schema:\n")
+
+	// 动态任务指令：根据 LastError 存在与否调整任务重心
+	if state.LastError != nil {
+		// 存在错误，偏向底层探测而非资源列举
+		sb.WriteString("⚠️ 检测到错误状态：\n")
+		sb.WriteString(fmt.Sprintf("错误信息: %s\n\n", state.LastError.Error()))
+		sb.WriteString("**当前任务优先级**：\n")
+		sb.WriteString("1. 优先分析失败原因，而不是重复列举资源\n")
+		sb.WriteString("2. 考虑使用底层探测工具（execute_safe_command）获取更多信息\n")
+		sb.WriteString("3. 尝试降级策略：运行时探测(docker/crictl) -> 系统工具(ps/netstat/df)\n")
+		sb.WriteString("4. 如果需要获取更多 K8s 资源信息，可以使用工具\n\n")
+	} else {
+		sb.WriteString("决定下一步。\n\n")
+	}
+
+	sb.WriteString("返回一个 JSON 对象，必须严格遵守以下 Schema:\n")
 	sb.WriteString("```json\n")
 	sb.WriteString("{\n")
 	sb.WriteString("  \"thought\": \"分析当前情况、历史记录并决定下一步行动的推理过程。如果之前的命令执行失败，请在 thought 中分析失败原因，并在 tool_calls 中提出替代方案或修复后的命令。\",\n")
@@ -683,30 +728,13 @@ func buildDecisionPrompt(state *State) string {
 	return sb.String()
 }
 
-// parseDecisionResponse parses LLM's decision response
-func parseDecisionResponse(content string) (Decision, error) {
+// parseDecisionResponseToResult parses LLM's decision response to DecisionResult
+// Parses JSON formatted response, extracts thought, decision, tool_calls
+func parseDecisionResponseToResult(content string) (*DecisionResult, error) {
 	// Clean response content
 	content = strings.TrimSpace(content)
 	content = strings.ToLower(content)
 
-	// Extract decision
-	if strings.Contains(content, "report") {
-		return DecisionReport, nil
-	}
-	if strings.Contains(content, "deep_query") || strings.Contains(content, "deep") {
-		return DecisionDeepQuery, nil
-	}
-	if strings.Contains(content, "continue") {
-		return DecisionContinue, nil
-	}
-
-	// Default to report decision
-	return DecisionReport, nil
-}
-
-// parseDecisionResponseToResult parses LLM's decision response to DecisionResult
-// Parses JSON formatted response, extracts thought, decision, tool_calls
-func parseDecisionResponseToResult(content string) (*DecisionResult, error) {
 	// Extract JSON content (handling possible Markdown code block markers)
 	jsonContent := extractJSON(content)
 
@@ -726,13 +754,10 @@ func parseDecisionResponseToResult(content string) (*DecisionResult, error) {
 			logger.Err(err))
 
 		// JSON parsing failed, fallback to text matching
-		decision, err := parseDecisionResponse(content)
-		if err != nil {
-			return nil, err
-		}
+		decisionStr := parseDecisionString(content)
 
 		return &DecisionResult{
-			Decision:  decision,
+			Decision:  decisionStr,
 			Reasoning: "JSON 解析失败，使用文本匹配",
 			ToolCalls: nil,
 		}, nil

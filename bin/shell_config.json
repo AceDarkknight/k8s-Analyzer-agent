@@ -1,11 +1,11 @@
 {
   "mcp_config": {
     "servers": [
-    {
-      "name": "default",
-      "url": ""
-    }
-  ],
+      {
+        "name": "default",
+        "url": ""
+      }
+    ],
     "token": ""
   },
   "timeout": 30,

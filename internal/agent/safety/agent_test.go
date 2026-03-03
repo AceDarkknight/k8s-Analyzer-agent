@@ -45,10 +45,14 @@ func (m *MockShellClient) ListTools(ctx context.Context) ([]client.Tool, error) 
 	}, nil
 }
 
-// TestValidator_Whitelist 测试白名单验证
+// TestValidator_Whitelist 测试白名单验证（已废弃，仅保留黑名单验证测试）
+// 注意：由于移除了 command_whitelist 功能，此测试仅验证黑名单和危险参数模式
 func TestValidator_Whitelist(t *testing.T) {
 	config := &SecurityConfig{
-		CommandWhitelist: []string{"ls", "cat", "kubectl"},
+		BlacklistedCommands: []string{"rm", "dd"},
+		DangerousArgsRegex: []string{
+			`rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/`,
+		},
 	}
 
 	validator, err := NewValidatorWithConfig(config, nil)
@@ -143,7 +147,6 @@ func TestValidator_Blacklist(t *testing.T) {
 // TestValidator_DangerousPatterns 测试危险模式匹配
 func TestValidator_DangerousPatterns(t *testing.T) {
 	config := &SecurityConfig{
-		CommandWhitelist: []string{"rm", "dd"},
 		DangerousArgsRegex: []string{
 			`rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/`,
 			`dd\s+.*of=/`,
@@ -209,7 +212,6 @@ func TestValidator_DangerousPatterns(t *testing.T) {
 // TestValidator_ComplexScenarios 测试复杂场景
 func TestValidator_ComplexScenarios(t *testing.T) {
 	config := &SecurityConfig{
-		CommandWhitelist:    []string{"ls", "cat", "kubectl", "grep"},
 		BlacklistedCommands: []string{"rm", "dd"},
 		DangerousArgsRegex: []string{
 			`rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/`,
@@ -258,9 +260,9 @@ func TestValidator_ComplexScenarios(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "command not in whitelist",
+			name:    "command not in blacklist",
 			command: "ps aux",
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 
@@ -277,7 +279,6 @@ func TestValidator_ComplexScenarios(t *testing.T) {
 // TestAgent_ExecuteSafeCommand 测试安全命令执行
 func TestAgent_ExecuteSafeCommand(t *testing.T) {
 	config := &SecurityConfig{
-		CommandWhitelist:    []string{"ls", "cat"},
 		BlacklistedCommands: []string{"rm"},
 		DangerousArgsRegex: []string{
 			`rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/`,
@@ -318,7 +319,7 @@ func TestAgent_ExecuteSafeCommand(t *testing.T) {
 		{
 			name:    "reject command not in whitelist",
 			command: "ps aux",
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 
@@ -342,7 +343,7 @@ func TestAgent_ExecuteSafeCommand(t *testing.T) {
 // TestAgent_ExecuteSafeCommandWithClientError 测试客户端错误处理
 func TestAgent_ExecuteSafeCommandWithClientError(t *testing.T) {
 	config := &SecurityConfig{
-		CommandWhitelist: []string{"ls"},
+		BlacklistedCommands: []string{"rm"},
 	}
 
 	validator, err := NewValidatorWithConfig(config, nil)
@@ -512,10 +513,9 @@ func TestAgent_FormatOutput(t *testing.T) {
 	}
 }
 
-// TestValidator_EmptyWhitelist 测试空白名单行为
-func TestValidator_EmptyWhitelist(t *testing.T) {
+// TestValidator_EmptyBlacklist 测试空白黑名单行为
+func TestValidator_EmptyBlacklist(t *testing.T) {
 	config := &SecurityConfig{
-		CommandWhitelist:    []string{},
 		BlacklistedCommands: []string{"rm"},
 	}
 

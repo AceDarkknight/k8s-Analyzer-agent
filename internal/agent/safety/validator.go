@@ -55,7 +55,6 @@ type LLMAuditor interface {
 // SecurityConfig 安全配置
 type SecurityConfig struct {
 	AllowReadOnly       bool     `json:"allow_read_only"`
-	CommandWhitelist    []string `json:"command_whitelist"`
 	BlacklistedCommands []string `json:"blacklisted_commands"`
 	DangerousArgsRegex  []string `json:"dangerous_args_regex"`
 
@@ -144,17 +143,7 @@ func (v *Validator) ValidateCommand(command string) error {
 		}
 	}
 
-	// 2. 检查白名单（如果配置了白名单）
-	if len(v.config.CommandWhitelist) > 0 {
-		if !v.isWhitelisted(commandName) {
-			return &UnsafeCommandError{
-				Command: command,
-				Reason:  fmt.Sprintf("command '%s' is not in whitelist", commandName),
-			}
-		}
-	}
-
-	// 3. 检查危险参数模式
+	// 2. 检查危险参数模式
 	if v.hasDangerousPattern(command) {
 		return &UnsafeCommandError{
 			Command: command,
@@ -249,16 +238,6 @@ func (v *Validator) isBlacklisted(commandName string) bool {
 	return false
 }
 
-// isWhitelisted 检查命令是否在白名单中
-func (v *Validator) isWhitelisted(commandName string) bool {
-	for _, whitelisted := range v.config.CommandWhitelist {
-		if strings.EqualFold(commandName, whitelisted) {
-			return true
-		}
-	}
-	return false
-}
-
 // hasDangerousPattern 检查命令是否包含危险参数模式
 func (v *Validator) hasDangerousPattern(command string) bool {
 	for _, re := range v.compiledRegexes {
@@ -331,45 +310,6 @@ func NewRuleBasedAuditor(llmConfig *config.LLMConfig) *RuleBasedAuditor {
 func (a *RuleBasedAuditor) SetTools(tools []client.Tool) {
 	a.tools = tools
 	logger.Info("[RuleBasedAuditor] Tools updated", logger.Int("tool_count", len(tools)))
-
-	// 记录格式化后的工具提示（用于验证）
-	if len(tools) > 0 {
-		toolsPrompt := a.FormatToolsPrompt()
-		logger.Debug("[RuleBasedAuditor] Tools formatted for system prompt",
-			logger.String("prompt_preview", toolsPrompt[:min(200, len(toolsPrompt))]))
-	}
-}
-
-// FormatToolsPrompt 格式化工具列表为 System Prompt
-// 返回包含所有允许的 Shell 命令的字符串，帮助审计器判断命令是否安全
-func (a *RuleBasedAuditor) FormatToolsPrompt() string {
-	if len(a.tools) == 0 {
-		return "当前没有可用的 Shell 工具，所有命令均被禁止。"
-	}
-
-	var prompt strings.Builder
-	prompt.WriteString("## 允许的 Shell 命令列表\n\n")
-	prompt.WriteString("以下是系统允许执行的 Shell 命令工具列表。只有这些命令（及其合理参数）被认为是安全的：\n\n")
-
-	for i, tool := range a.tools {
-		prompt.WriteString(fmt.Sprintf("%d. **%s**: %s\n", i+1, tool.Name, tool.Description))
-	}
-
-	prompt.WriteString("\n**审计指南**:\n")
-	prompt.WriteString("- 只允许执行上述列表中的命令\n")
-	prompt.WriteString("- 检查命令参数是否合理，避免危险操作（如删除系统文件、无限循环等）\n")
-	prompt.WriteString("- 对于可能修改系统状态的命令，给出警告级别\n")
-	prompt.WriteString("- 对于明显危险的命令（如 rm -rf /、fork bomb 等），直接拒绝\n\n")
-
-	return prompt.String()
-}
-
-// min 返回两个整数中的较小值
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // AuditCommand 审计命令的安全性
