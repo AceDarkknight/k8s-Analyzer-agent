@@ -82,7 +82,8 @@ type Client interface {
 
 // CallToolResult 工具调用结果
 type CallToolResult struct {
-	Content []Content
+	Content      []Content
+	ToolHasError bool // 新增字段：标识工具执行是否发生业务错误
 }
 
 // Content 内容接口
@@ -257,7 +258,8 @@ func (c *RealClient) CallTool(ctx context.Context, name string, args map[string]
 
 	// 转换 mcp.CallToolResult 为 CallToolResult
 	callToolResult := &CallToolResult{
-		Content: convertContent(result.Content),
+		Content:      convertContent(result.Content),
+		ToolHasError: result.IsError, // 映射 SDK 的 IsError 字段
 	}
 
 	// 记录工具调用成功

@@ -66,7 +66,7 @@ func CallToolResultToMcp(result *CallToolResult) *mcp.CallToolResult {
 
 	return &mcp.CallToolResult{
 		Content: mcpContents,
-		IsError: false,
+		IsError: result.ToolHasError,
 	}
 }
 

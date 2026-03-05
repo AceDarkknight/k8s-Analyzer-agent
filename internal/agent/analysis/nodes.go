@@ -63,17 +63,10 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 	logger.Info("[InfoNode] Starting information collection", logger.String("userInput", state.UserInput))
 
 	// 步骤 1: 获取所有命名空间
-	namespaces, usedFallback, err := n.collectNamespaces(ctx)
+	namespaces, _, err := n.collectNamespaces(ctx)
 	if err != nil {
-		logger.Warn("[InfoNode] Failed to list namespaces, falling back to default", logger.Err(err))
-		// 回退到 default 命名空间，但不设置 LastError，因为这只是一个警告
-		namespaces = []string{"default"}
-		usedFallback = true
-	}
-
-	// 如果使用了回退列表，添加发现
-	if usedFallback {
-		state.AddFinding("Warning", "Cluster", "无法获取完整命名空间列表，已回退至部分扫描模式（仅检查 default 和 kube-system）。请检查 K8s MCP Server 连接状态。")
+		logger.Error("[InfoNode] Failed to list namespaces, aborting", logger.Err(err))
+		return state, err
 	}
 
 	// 检查用户是否指定了特定命名空间
@@ -95,7 +88,6 @@ func (n *InfoNode) Execute(ctx context.Context, state *State) (*State, error) {
 	// 步骤 2: 遍历每个命名空间收集资源
 	allPods := make([]PodInfo, 0)
 	allDeployments := make([]DeploymentInfo, 0)
-	// allEvents := make([]EventInfo, 0)
 
 	for _, ns := range namespaces {
 		logger.Debug("[InfoNode] Collecting resources from namespace", logger.String("namespace", ns))
@@ -171,20 +163,32 @@ func (n *InfoNode) extractNamespace(input string) string {
 
 // collectNamespaces 收集所有命名空间
 // 返回值：命名空间列表和是否使用了回退列表
+// 注意：此方法实现了非阻塞错误处理逻辑
+// - 基础设施级错误（err != nil）：返回错误，中断 Graph 执行
+// - 业务逻辑级错误（result.ToolHasError == true）：记录警告，返回默认命名空间，继续执行
 func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, bool, error) {
 	// 先检查 list_namespaces 工具是否可用
 	if !n.hasTool(ctx, "list_namespaces") {
-		logger.Info("[InfoNode] list_namespaces tool not available on MCP server, using hardcoded fallback list")
-		// 减少命名空间数量用于测试，只保留 default 和 kube-system
-		return []string{"default", "kube-system"}, true, nil
+		return nil, false, fmt.Errorf("list_namespaces tool not available on MCP server")
 	}
 
 	// 调用 K8s MCP 工具获取命名空间列表
 	result, err := n.k8sClient.CallTool(ctx, "list_namespaces", nil)
 	if err != nil {
-		logger.Warn("[InfoNode] list_namespaces tool call failed, using hardcoded fallback list", logger.Err(err))
-		// K8s MCP 服务器不支持 list_namespaces，返回硬编码的常见命名空间列表
-		return []string{"default", "kube-system"}, true, nil
+		// 基础设施级错误：无法与 MCP Server 通信，直接返回错误中断执行
+		return nil, false, fmt.Errorf("failed to call list_namespaces tool: %w", err)
+	}
+
+	// 检查业务逻辑级错误（Server 返回了错误状态）
+	if result != nil && result.ToolHasError {
+		// 记录业务逻辑错误到 state，不中断执行
+		errMsg := fmt.Sprintf("MCP tool 'list_namespaces' returned error: %v", result.Content)
+		logger.Warn("[InfoNode] Business logic error in list_namespaces", logger.String("error", errMsg))
+
+		// 这里我们返回默认命名空间，让调用方处理
+		defaultNamespace := []string{"default"}
+		logger.Info("[InfoNode] Using default namespace due to business error", logger.Any("namespaces", defaultNamespace))
+		return defaultNamespace, true, nil
 	}
 
 	// 解析结果
@@ -193,8 +197,11 @@ func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, bool, error
 		// 解析为 k8s-mcp 的 Namespace 类型切片
 		k8sNamespaces, err := k8s.ParseToolResult[[]k8s.Namespace](result, "list_namespaces")
 		if err != nil {
-			logger.Warn("[InfoNode] Failed to parse namespaces result", logger.Err(err))
-			return []string{"default", "kube-system"}, true, nil
+			// 解析失败，记录为业务逻辑错误，返回默认命名空间
+			errMsg := fmt.Sprintf("failed to parse namespaces result: %v", err)
+			logger.Warn("[InfoNode] Parse error in list_namespaces", logger.String("error", errMsg))
+			defaultNamespace := []string{"default"}
+			return defaultNamespace, true, nil
 		}
 		// 转换为字符串切片
 		for _, ns := range k8sNamespaces {
@@ -202,10 +209,9 @@ func (n *InfoNode) collectNamespaces(ctx context.Context) ([]string, bool, error
 		}
 	}
 
-	// 如果没有获取到命名空间，使用硬编码列表作为回退
+	// 如果没有获取到命名空间，返回错误
 	if len(namespaces) == 0 {
-		logger.Info("[InfoNode] No namespaces returned from MCP, using hardcoded fallback list")
-		return []string{"default", "kube-system"}, true, nil
+		return nil, false, fmt.Errorf("no namespaces returned from MCP server")
 	}
 
 	logger.Debug("[InfoNode] Collected namespaces", logger.Any("namespaces", namespaces))
@@ -250,7 +256,7 @@ func (n *InfoNode) collectPods(ctx context.Context, namespace string) ([]PodInfo
 	return pods, nil
 }
 
-//collectServices 收集 Service 信息
+// collectServices 收集 Service 信息
 //func (n *InfoNode) collectServices(ctx context.Context, namespace string) ([]ServiceInfo, error) {
 //	args := map[string]interface{} {
 //		"namespace": namespace,
@@ -269,6 +275,7 @@ func (n *InfoNode) collectPods(ctx context.Context, namespace string) ([]PodInfo
 //			logger.Warn("[InfoNode] Failed to parse services result", logger.Err(err))
 //			return services, nil
 //		}
+
 //		// 转换为内部 ServiceInfo 类型
 //		for _, s := range k8sServices {
 //			serviceInfo := ServiceInfo{
@@ -283,7 +290,7 @@ func (n *InfoNode) collectPods(ctx context.Context, namespace string) ([]PodInfo
 
 //	logger.Debug("[InfoNode] Collected services from namespace", logger.String("namespace", namespace), logger.Int("count", len(services)))
 //	return services, nil
-// }
+//}
 
 // collectDeployments 收集 Deployment 信息
 func (n *InfoNode) collectDeployments(ctx context.Context, namespace string) ([]DeploymentInfo, error) {

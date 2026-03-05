@@ -70,6 +70,8 @@ func (c *MockClient) CallTool(ctx context.Context, name string, args map[string]
 	// 根据工具名称返回模拟数据
 	var textData string
 	switch name {
+	case "list_namespaces":
+		textData = c.mockListNamespacesJSON()
 	case "list_pods":
 		textData = c.mockListPodsJSON(args)
 	case "list_services":
@@ -96,6 +98,11 @@ func (c *MockClient) ListTools(ctx context.Context) ([]clientpkg.Tool, error) {
 	}
 
 	return []clientpkg.Tool{
+		{
+			Name:        "list_namespaces",
+			Description: "List all namespaces in the cluster",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		},
 		{
 			Name:        "list_pods",
 			Description: "List pods in a namespace",
@@ -181,6 +188,24 @@ func (c *MockClient) mockListPodsJSON(args map[string]interface{}) string {
 	}
 
 	data, _ := json.Marshal(pods)
+	return string(data)
+}
+
+// mockListNamespacesJSON 模拟列出命名空间（返回 JSON）
+func (c *MockClient) mockListNamespacesJSON() string {
+	namespaces := []Namespace{
+		{
+			Name: "default",
+		},
+		{
+			Name: "kube-system",
+		},
+		{
+			Name: "kube-public",
+		},
+	}
+
+	data, _ := json.Marshal(namespaces)
 	return string(data)
 }
 
