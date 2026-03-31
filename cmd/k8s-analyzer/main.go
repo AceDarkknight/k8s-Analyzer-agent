@@ -83,13 +83,13 @@ func main() {
 	// 6. 初始化 Shell MCP Client（Warn if 失败，降级模式）
 	var mcpClient *shellmcp.ShellMCPClient
 	mcpClient = shellmcp.NewShellMCPClient(cfg.ShellMCP.ServerURL, cfg.ShellMCP.AuthToken)
-	
+
 	// 使用带超时的连接
 	connectDone := make(chan error, 1)
 	go func() {
 		connectDone <- mcpClient.Connect(ctx)
 	}()
-	
+
 	select {
 	case err := <-connectDone:
 		if err != nil {

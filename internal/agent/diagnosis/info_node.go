@@ -44,7 +44,7 @@ func (n *InfoNode) Execute(ctx context.Context, s *state.State) (*state.State, e
 	if len(stdoutPreview) > 200 {
 		stdoutPreview = stdoutPreview[:200] + "..."
 	}
-	logger.Info("InfoNode: received gateway response", 
+	logger.Info("InfoNode: received gateway response",
 		logger.String("stdout_preview", stdoutPreview),
 		logger.Int("stdout_length", len(resp.Stdout)))
 
