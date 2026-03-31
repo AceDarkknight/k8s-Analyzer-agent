@@ -1,553 +1,630 @@
-// Package safety 测试命令安全验证和执行功能
 package safety
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
-	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
-	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shellmcp"
 )
 
-// MockShellClient 模拟 Shell 客户端
-type MockShellClient struct {
-	executeFunc   func(ctx context.Context, command string) (*shell.ExecuteResult, error)
-	listToolsFunc func(ctx context.Context) ([]client.Tool, error)
+// mockAuditor 模拟 LLM 审计器
+type mockAuditor struct {
+	result *AuditResult
+	err    error
 }
 
-func (m *MockShellClient) ExecuteCommand(ctx context.Context, command string) (*shell.ExecuteResult, error) {
-	if m.executeFunc != nil {
-		return m.executeFunc(ctx, command)
+func (m *mockAuditor) Audit(ctx context.Context, command, reason string) (*AuditResult, error) {
+	return m.result, m.err
+}
+
+// mockCommandExecutor 模拟命令执行器
+type mockCommandExecutor struct {
+	result *shellmcp.ExecuteResult
+	err    error
+}
+
+func (m *mockCommandExecutor) ExecuteCommand(ctx context.Context, command string) (*shellmcp.ExecuteResult, error) {
+	return m.result, m.err
+}
+
+// TestExecuteSafeCommand_Whitelist_Allow 测试白名单命令直接执行
+func TestExecuteSafeCommand_Whitelist_Allow(t *testing.T) {
+	// 创建规则引擎：kubectl get 在白名单中
+	rules, err := NewRuleEngineFromConfig(
+		[]string{"kubectl get", "kubectl describe", "cat", "ls"},
+		[]string{},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
 	}
-	return &shell.ExecuteResult{
-		Summary: "Mock execution successful",
-		Groups: []shell.ExecuteGroup{
-			{
-				Count:  1,
-				Status: "success",
-				Output: "mock output",
-				Nodes:  []string{"node1"},
+
+	// 创建 mock 执行器
+	mockExec := &mockCommandExecutor{
+		result: &shellmcp.ExecuteResult{
+			Results: []shellmcp.NodeResult{
+				{
+					NodeID:   "node-1",
+					Stdout:   "pod-1 Running",
+					Stderr:   "",
+					ExitCode: 0,
+					Success:  true,
+				},
 			},
 		},
-	}, nil
-}
-
-func (m *MockShellClient) ListTools(ctx context.Context) ([]client.Tool, error) {
-	if m.listToolsFunc != nil {
-		return m.listToolsFunc(ctx)
-	}
-	return []client.Tool{
-		{
-			Name:        "execute_command",
-			Description: "Execute a shell command",
-		},
-	}, nil
-}
-
-// TestValidator_Whitelist 测试白名单验证（已废弃，仅保留黑名单验证测试）
-// 注意：由于移除了 command_whitelist 功能，此测试仅验证黑名单和危险参数模式
-func TestValidator_Whitelist(t *testing.T) {
-	config := &SecurityConfig{
-		BlacklistedCommands: []string{"rm", "dd"},
-		DangerousArgsRegex: []string{
-			`rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/`,
-		},
 	}
 
-	validator, err := NewValidatorWithConfig(config, nil)
+	// auditor 为 nil，但白名单命令不需要 LLM
+	agent := NewSafetyAgent(rules, nil, mockExec)
+
+	req := &CommandRequest{
+		Command: "kubectl get pods",
+		Reason:  "查看 pod 状态",
+	}
+
+	result, err := agent.ExecuteSafeCommand(context.Background(), req)
 	if err != nil {
-		t.Fatalf("Failed to create validator: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	tests := []struct {
-		name    string
-		command string
-		wantErr bool
-	}{
-		{
-			name:    "safe command in whitelist",
-			command: "ls -la",
-			wantErr: false,
-		},
-		{
-			name:    "safe command in whitelist with different case",
-			command: "LS -la",
-			wantErr: false,
-		},
-		{
-			name:    "command not in whitelist",
-			command: "rm -rf /",
-			wantErr: true,
-		},
-		{
-			name:    "empty command",
-			command: "",
-			wantErr: true,
-		},
+	// 验证结果
+	if result.AuditInfo == nil {
+		t.Fatal("expected AuditInfo to be set")
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validator.ValidateCommand(tt.command)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateCommand() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+	if !result.AuditInfo.Allowed {
+		t.Error("expected command to be allowed")
+	}
+	if result.AuditInfo.SafetyLevel != "safe" {
+		t.Errorf("expected safety level 'safe', got '%s'", result.AuditInfo.SafetyLevel)
+	}
+	if result.AuditInfo.Method != "rule" {
+		t.Errorf("expected method 'rule', got '%s'", result.AuditInfo.Method)
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %d", result.ExitCode)
+	}
+	if !strings.Contains(result.Stdout, "pod-1") {
+		t.Errorf("expected stdout to contain 'pod-1', got '%s'", result.Stdout)
 	}
 }
 
-// TestValidator_Blacklist 测试黑名单验证
-func TestValidator_Blacklist(t *testing.T) {
-	config := &SecurityConfig{
-		BlacklistedCommands: []string{"rm", "mkfs", "shutdown"},
-	}
-
-	validator, err := NewValidatorWithConfig(config, nil)
+// TestExecuteSafeCommand_Blacklist_Deny 测试黑名单命令被拒绝
+func TestExecuteSafeCommand_Blacklist_Deny(t *testing.T) {
+	// 创建规则引擎：rm -rf 在黑名单中
+	rules, err := NewRuleEngineFromConfig(
+		[]string{"kubectl get"},
+		[]string{`rm\s+-rf\s+/(\.\*)?`},
+	)
 	if err != nil {
-		t.Fatalf("Failed to create validator: %v", err)
+		t.Fatalf("failed to create rule engine: %v", err)
 	}
 
-	tests := []struct {
-		name    string
-		command string
-		wantErr bool
-	}{
-		{
-			name:    "blacklisted command",
-			command: "rm -rf /",
-			wantErr: true,
-		},
-		{
-			name:    "blacklisted command with different case",
-			command: "MKFS /dev/sda1",
-			wantErr: true,
-		},
-		{
-			name:    "safe command not blacklisted",
-			command: "ls -la",
-			wantErr: false,
-		},
-	}
+	// auditor 和 executor 都不会被调用
+	agent := NewSafetyAgent(rules, nil, nil)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validator.ValidateCommand(tt.command)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateCommand() error = %v, wantErr %v", err, tt.wantErr)
-			}
-
-			if tt.wantErr && !IsUnsafeCommand(err) {
-				t.Errorf("Expected UnsafeCommandError, got %T", err)
-			}
-		})
-	}
-}
-
-// TestValidator_DangerousPatterns 测试危险模式匹配
-func TestValidator_DangerousPatterns(t *testing.T) {
-	config := &SecurityConfig{
-		DangerousArgsRegex: []string{
-			`rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/`,
-			`dd\s+.*of=/`,
-		},
-	}
-
-	validator, err := NewValidatorWithConfig(config, nil)
-	if err != nil {
-		t.Fatalf("Failed to create validator: %v", err)
-	}
-
-	tests := []struct {
-		name    string
-		command string
-		wantErr bool
-	}{
-		{
-			name:    "rm -rf / dangerous pattern",
-			command: "rm -rf /",
-			wantErr: true,
-		},
-		{
-			name:    "rm -r / dangerous pattern",
-			command: "rm -r /",
-			wantErr: true,
-		},
-		{
-			name:    "rm -rfv / dangerous pattern",
-			command: "rm -rfv /",
-			wantErr: true,
-		},
-		{
-			name:    "dd with of=/ dangerous pattern",
-			command: "dd if=/dev/zero of=/dev/sda1",
-			wantErr: true,
-		},
-		{
-			name:    "safe rm command",
-			command: "rm -rf /tmp/test",
-			wantErr: true, // rm -rf /tmp/test 匹配 rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/
-		},
-		{
-			name:    "safe dd command",
-			command: "dd if=/dev/zero of=/tmp/test.img",
-			wantErr: true, // dd if=/dev/zero of=/tmp/test.img 匹配 dd\s+.*of=/
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validator.ValidateCommand(tt.command)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateCommand() error = %v, wantErr %v", err, tt.wantErr)
-			}
-
-			if tt.wantErr && !IsUnsafeCommand(err) {
-				t.Errorf("Expected UnsafeCommandError, got %T", err)
-			}
-		})
-	}
-}
-
-// TestValidator_ComplexScenarios 测试复杂场景
-func TestValidator_ComplexScenarios(t *testing.T) {
-	config := &SecurityConfig{
-		BlacklistedCommands: []string{"rm", "dd"},
-		DangerousArgsRegex: []string{
-			`rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/`,
-			`dd\s+.*of=/`,
-		},
-	}
-
-	validator, err := NewValidatorWithConfig(config, nil)
-	if err != nil {
-		t.Fatalf("Failed to create validator: %v", err)
-	}
-
-	tests := []struct {
-		name    string
-		command string
-		wantErr bool
-	}{
-		{
-			name:    "safe ls command",
-			command: "ls -la /tmp",
-			wantErr: false,
-		},
-		{
-			name:    "safe cat command",
-			command: "cat /etc/hosts",
-			wantErr: false,
-		},
-		{
-			name:    "safe kubectl command",
-			command: "kubectl get pods",
-			wantErr: false,
-		},
-		{
-			name:    "safe grep command",
-			command: "grep error /var/log/app.log",
-			wantErr: false,
-		},
-		{
-			name:    "blacklisted rm command",
-			command: "rm /tmp/test",
-			wantErr: true,
-		},
-		{
-			name:    "blacklisted dd command",
-			command: "dd if=/dev/zero of=/tmp/test",
-			wantErr: true,
-		},
-		{
-			name:    "command not in blacklist",
-			command: "ps aux",
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validator.ValidateCommand(tt.command)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateCommand() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-// TestAgent_ExecuteSafeCommand 测试安全命令执行
-func TestAgent_ExecuteSafeCommand(t *testing.T) {
-	config := &SecurityConfig{
-		BlacklistedCommands: []string{"rm"},
-		DangerousArgsRegex: []string{
-			`rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/`,
-		},
-	}
-
-	validator, err := NewValidatorWithConfig(config, nil)
-	if err != nil {
-		t.Fatalf("Failed to create validator: %v", err)
-	}
-
-	mockClient := &MockShellClient{}
-	agent, err := NewAgentWithValidator(mockClient, validator)
-	if err != nil {
-		t.Fatalf("Failed to create agent: %v", err)
-	}
-
-	tests := []struct {
-		name    string
-		command string
-		wantErr bool
-	}{
-		{
-			name:    "execute safe command",
-			command: "ls -la",
-			wantErr: false,
-		},
-		{
-			name:    "execute another safe command",
-			command: "cat /etc/hosts",
-			wantErr: false,
-		},
-		{
-			name:    "reject blacklisted command",
-			command: "rm -rf /",
-			wantErr: true,
-		},
-		{
-			name:    "reject command not in whitelist",
-			command: "ps aux",
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			output, err := agent.ExecuteSafeCommand(ctx, tt.command)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ExecuteSafeCommand() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if !tt.wantErr && output == "" {
-				t.Errorf("ExecuteSafeCommand() expected output, got empty string")
-			}
-		})
-	}
-}
-
-// TestAgent_ExecuteSafeCommandWithClientError 测试客户端错误处理
-func TestAgent_ExecuteSafeCommandWithClientError(t *testing.T) {
-	config := &SecurityConfig{
-		BlacklistedCommands: []string{"rm"},
-	}
-
-	validator, err := NewValidatorWithConfig(config, nil)
-	if err != nil {
-		t.Fatalf("Failed to create validator: %v", err)
-	}
-
-	// 创建返回错误的模拟客户端
-	mockClient := &MockShellClient{
-		executeFunc: func(ctx context.Context, command string) (*shell.ExecuteResult, error) {
-			return nil, errors.New("client connection failed")
-		},
-	}
-
-	agent, err := NewAgentWithValidator(mockClient, validator)
-	if err != nil {
-		t.Fatalf("Failed to create agent: %v", err)
-	}
-
-	ctx := context.Background()
-	_, err = agent.ExecuteSafeCommand(ctx, "ls -la")
-
-	if err == nil {
-		t.Errorf("Expected error from ExecuteSafeCommand, got nil")
-	}
-
-	if IsUnsafeCommand(err) {
-		t.Errorf("Expected client error, not UnsafeCommandError")
-	}
-}
-
-// TestUnsafeCommandError 测试不安全命令错误
-func TestUnsafeCommandError(t *testing.T) {
-	err := &UnsafeCommandError{
+	req := &CommandRequest{
 		Command: "rm -rf /",
-		Reason:  "command 'rm' is in blacklist",
+		Reason:  "清理磁盘",
 	}
 
-	expected := "unsafe command: rm -rf / - command 'rm' is in blacklist"
-	if err.Error() != expected {
-		t.Errorf("UnsafeCommandError.Error() = %v, want %v", err.Error(), expected)
-	}
-
-	if !IsUnsafeCommand(err) {
-		t.Errorf("IsUnsafeCommand() should return true for UnsafeCommandError")
-	}
-
-	otherErr := errors.New("some other error")
-	if IsUnsafeCommand(otherErr) {
-		t.Errorf("IsUnsafeCommand() should return false for non-UnsafeCommandError")
-	}
-}
-
-// TestValidator_ExtractCommandName 测试命令名称提取
-func TestValidator_ExtractCommandName(t *testing.T) {
-	config := &SecurityConfig{}
-	validator, err := NewValidatorWithConfig(config, nil)
+	result, err := agent.ExecuteSafeCommand(context.Background(), req)
 	if err != nil {
-		t.Fatalf("Failed to create validator: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	tests := []struct {
-		name     string
-		command  string
-		expected string
-	}{
-		{
-			name:     "simple command",
-			command:  "ls",
-			expected: "ls",
-		},
-		{
-			name:     "command with arguments",
-			command:  "ls -la /tmp",
-			expected: "ls",
-		},
-		{
-			name:     "command with pipe",
-			command:  "ls | grep test",
-			expected: "ls",
-		},
-		{
-			name:     "command with semicolon",
-			command:  "ls ; cat file",
-			expected: "ls",
-		},
-		{
-			name:     "command with redirection",
-			command:  "ls > output.txt",
-			expected: "ls",
-		},
-		{
-			name:     "command with tabs",
-			command:  "ls\t-la",
-			expected: "ls",
-		},
-		{
-			name:     "command with leading/trailing spaces",
-			command:  "  ls -la  ",
-			expected: "ls",
-		},
+	// 验证结果：被拒绝
+	if result.AuditInfo == nil {
+		t.Fatal("expected AuditInfo to be set")
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := validator.extractCommandName(tt.command)
-			if result != tt.expected {
-				t.Errorf("extractCommandName() = %v, want %v", result, tt.expected)
-			}
-		})
+	if result.AuditInfo.Allowed {
+		t.Error("expected command to be denied")
+	}
+	if result.AuditInfo.SafetyLevel != "dangerous" {
+		t.Errorf("expected safety level 'dangerous', got '%s'", result.AuditInfo.SafetyLevel)
+	}
+	if result.AuditInfo.Method != "rule" {
+		t.Errorf("expected method 'rule', got '%s'", result.AuditInfo.Method)
+	}
+	// 验证有建议
+	if result.AuditInfo.Advice == "" {
+		t.Error("expected advice to be provided for denied command")
 	}
 }
 
-// TestAgent_FormatOutput 测试输出格式化
-func TestAgent_FormatOutput(t *testing.T) {
-	agent := &Agent{}
+// TestExecuteSafeCommand_Unknown_LLM_Safe 测试未知命令 + LLM 判定 safe
+func TestExecuteSafeCommand_Unknown_LLM_Safe(t *testing.T) {
+	// 创建规则引擎：空规则
+	rules, err := NewRuleEngineFromConfig(
+		[]string{},
+		[]string{},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
+	}
 
-	tests := []struct {
-		name   string
-		result *shell.ExecuteResult
-		want   string
-	}{
-		{
-			name:   "nil result",
-			result: nil,
-			want:   "",
+	// 创建 mock LLM 审计器，返回 safe
+	mockAuditor := &mockAuditor{
+		result: &AuditResult{
+			SafetyLevel: "safe",
+			Reason:      "这是一个只读命令",
+			Advice:      "",
 		},
-		{
-			name: "successful execution",
-			result: &shell.ExecuteResult{
-				Summary: "Executed on 1 nodes: 1 success, 0 failed",
-				Groups: []shell.ExecuteGroup{
-					{
-						Count:  1,
-						Status: "success",
-						Output: "file1.txt\nfile2.txt",
-						Nodes:  []string{"node1"},
-					},
+	}
+
+	// 创建 mock 执行器
+	mockExec := &mockCommandExecutor{
+		result: &shellmcp.ExecuteResult{
+			Results: []shellmcp.NodeResult{
+				{
+					NodeID:   "node-1",
+					Stdout:   "output",
+					Stderr:   "",
+					ExitCode: 0,
+					Success:  true,
 				},
 			},
-			want: "Executed on 1 nodes: 1 success, 0 failed\n\nOutput:\nfile1.txt\nfile2.txt\n",
-		},
-		{
-			name: "failed execution",
-			result: &shell.ExecuteResult{
-				Summary: "Executed on 1 nodes: 0 success, 1 failed",
-				Groups: []shell.ExecuteGroup{
-					{
-						Count:  1,
-						Status: "failed",
-						Output: "command not found",
-						Nodes:  []string{"node1"},
-					},
-				},
-			},
-			want: "Executed on 1 nodes: 0 success, 1 failed\n\nErrors:\ncommand not found\n",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := agent.formatOutput(tt.result)
-			if result != tt.want {
-				t.Errorf("formatOutput() = %v, want %v", result, tt.want)
-			}
-		})
+	agent := NewSafetyAgent(rules, mockAuditor, mockExec)
+
+	req := &CommandRequest{
+		Command: "some_unknown_command",
+		Reason:  "测试",
+	}
+
+	result, err := agent.ExecuteSafeCommand(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 验证结果：允许执行
+	if result.AuditInfo == nil {
+		t.Fatal("expected AuditInfo to be set")
+	}
+	if !result.AuditInfo.Allowed {
+		t.Error("expected command to be allowed")
+	}
+	if result.AuditInfo.SafetyLevel != "safe" {
+		t.Errorf("expected safety level 'safe', got '%s'", result.AuditInfo.SafetyLevel)
+	}
+	if result.AuditInfo.Method != "llm" {
+		t.Errorf("expected method 'llm', got '%s'", result.AuditInfo.Method)
 	}
 }
 
-// TestValidator_EmptyBlacklist 测试空白黑名单行为
-func TestValidator_EmptyBlacklist(t *testing.T) {
-	config := &SecurityConfig{
-		BlacklistedCommands: []string{"rm"},
-	}
-
-	validator, err := NewValidatorWithConfig(config, nil)
+// TestExecuteSafeCommand_Unknown_LLM_Warning 测试未知命令 + LLM 判定 warning
+func TestExecuteSafeCommand_Unknown_LLM_Warning(t *testing.T) {
+	// 创建规则引擎：空规则
+	rules, err := NewRuleEngineFromConfig(
+		[]string{},
+		[]string{},
+	)
 	if err != nil {
-		t.Fatalf("Failed to create validator: %v", err)
+		t.Fatalf("failed to create rule engine: %v", err)
 	}
 
-	// 空白名单时，只检查黑名单
+	// 创建 mock LLM 审计器，返回 warning
+	mockAuditor := &mockAuditor{
+		result: &AuditResult{
+			SafetyLevel: "warning",
+			Reason:      "这是一个可能有风险的操作",
+			Advice:      "请谨慎操作",
+		},
+	}
+
+	// 创建 mock 执行器
+	mockExec := &mockCommandExecutor{
+		result: &shellmcp.ExecuteResult{
+			Results: []shellmcp.NodeResult{
+				{
+					NodeID:   "node-1",
+					Stdout:   "output",
+					Stderr:   "",
+					ExitCode: 0,
+					Success:  true,
+				},
+			},
+		},
+	}
+
+	agent := NewSafetyAgent(rules, mockAuditor, mockExec)
+
+	req := &CommandRequest{
+		Command: "some_command",
+		Reason:  "测试",
+	}
+
+	result, err := agent.ExecuteSafeCommand(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 验证结果：允许执行（warning 也允许）
+	if result.AuditInfo == nil {
+		t.Fatal("expected AuditInfo to be set")
+	}
+	if !result.AuditInfo.Allowed {
+		t.Error("expected command to be allowed")
+	}
+	if result.AuditInfo.SafetyLevel != "warning" {
+		t.Errorf("expected safety level 'warning', got '%s'", result.AuditInfo.SafetyLevel)
+	}
+}
+
+// TestExecuteSafeCommand_Unknown_LLM_Dangerous 测试未知命令 + LLM 判定 dangerous
+func TestExecuteSafeCommand_Unknown_LLM_Dangerous(t *testing.T) {
+	// 创建规则引擎：空规则
+	rules, err := NewRuleEngineFromConfig(
+		[]string{},
+		[]string{},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
+	}
+
+	// 创建 mock LLM 审计器，返回 dangerous
+	mockAuditor := &mockAuditor{
+		result: &AuditResult{
+			SafetyLevel: "dangerous",
+			Reason:      "这是一个危险操作",
+			Advice:      "建议使用其他命令",
+		},
+	}
+
+	// executor 不会被调用
+	agent := NewSafetyAgent(rules, mockAuditor, nil)
+
+	req := &CommandRequest{
+		Command: "dangerous_command",
+		Reason:  "测试",
+	}
+
+	result, err := agent.ExecuteSafeCommand(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 验证结果：被拒绝
+	if result.AuditInfo == nil {
+		t.Fatal("expected AuditInfo to be set")
+	}
+	if result.AuditInfo.Allowed {
+		t.Error("expected command to be denied")
+	}
+	if result.AuditInfo.SafetyLevel != "dangerous" {
+		t.Errorf("expected safety level 'dangerous', got '%s'", result.AuditInfo.SafetyLevel)
+	}
+	if result.AuditInfo.Reason != "这是一个危险操作" {
+		t.Errorf("expected reason '这是一个危险操作', got '%s'", result.AuditInfo.Reason)
+	}
+	if result.AuditInfo.Advice != "建议使用其他命令" {
+		t.Errorf("expected advice '建议使用其他命令', got '%s'", result.AuditInfo.Advice)
+	}
+}
+
+// TestExecuteSafeCommand_Unknown_LLM_Nil 测试未知命令 + LLM 不可用（nil）
+func TestExecuteSafeCommand_Unknown_LLM_Nil(t *testing.T) {
+	// 创建规则引擎：空规则
+	rules, err := NewRuleEngineFromConfig(
+		[]string{},
+		[]string{},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
+	}
+
+	// auditor 为 nil
+	agent := NewSafetyAgent(rules, nil, nil)
+
+	req := &CommandRequest{
+		Command: "unknown_command",
+		Reason:  "测试",
+	}
+
+	result, err := agent.ExecuteSafeCommand(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 验证结果：降级拒绝
+	if result.AuditInfo == nil {
+		t.Fatal("expected AuditInfo to be set")
+	}
+	if result.AuditInfo.Allowed {
+		t.Error("expected command to be denied when LLM is unavailable")
+	}
+	if result.AuditInfo.SafetyLevel != "dangerous" {
+		t.Errorf("expected safety level 'dangerous', got '%s'", result.AuditInfo.SafetyLevel)
+	}
+	if result.AuditInfo.Method != "rule" {
+		t.Errorf("expected method 'rule', got '%s'", result.AuditInfo.Method)
+	}
+}
+
+// TestExecuteSafeCommand_Unknown_LLM_Timeout 测试未知命令 + LLM 超时（返回 nil）
+func TestExecuteSafeCommand_Unknown_LLM_Timeout(t *testing.T) {
+	// 创建规则引擎：空规则
+	rules, err := NewRuleEngineFromConfig(
+		[]string{},
+		[]string{},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
+	}
+
+	// 创建 mock LLM 审计器，返回 nil（模拟超时）
+	mockAuditor := &mockAuditor{
+		result: nil,
+		err:    nil,
+	}
+
+	agent := NewSafetyAgent(rules, mockAuditor, nil)
+
+	req := &CommandRequest{
+		Command: "unknown_command",
+		Reason:  "测试",
+	}
+
+	result, err := agent.ExecuteSafeCommand(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 验证结果：降级拒绝
+	if result.AuditInfo == nil {
+		t.Fatal("expected AuditInfo to be set")
+	}
+	if result.AuditInfo.Allowed {
+		t.Error("expected command to be denied when LLM times out")
+	}
+	if result.AuditInfo.SafetyLevel != "dangerous" {
+		t.Errorf("expected safety level 'dangerous', got '%s'", result.AuditInfo.SafetyLevel)
+	}
+	if result.AuditInfo.Reason != "LLM audit timeout or failure" {
+		t.Errorf("expected reason 'LLM audit timeout or failure', got '%s'", result.AuditInfo.Reason)
+	}
+}
+
+// TestExecuteSafeCommand_ExecuteError 测试执行失败返回 error
+func TestExecuteSafeCommand_ExecuteError(t *testing.T) {
+	// 创建规则引擎：命令在白名单中
+	rules, err := NewRuleEngineFromConfig(
+		[]string{"kubectl get"},
+		[]string{},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
+	}
+
+	// 创建 mock 执行器，返回错误
+	mockExec := &mockCommandExecutor{
+		result: nil,
+		err:    errors.New("connection refused"),
+	}
+
+	agent := NewSafetyAgent(rules, nil, mockExec)
+
+	req := &CommandRequest{
+		Command: "kubectl get pods",
+		Reason:  "查看 pod",
+	}
+
+	_, err = agent.ExecuteSafeCommand(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for execution failure")
+	}
+	if !strings.Contains(err.Error(), "execute command") {
+		t.Errorf("expected error to contain 'execute command', got '%s'", err.Error())
+	}
+}
+
+// TestExecuteSimple_Allowed 测试 ExecuteSimple 允许执行
+func TestExecuteSimple_Allowed(t *testing.T) {
+	// 创建规则引擎
+	rules, err := NewRuleEngineFromConfig(
+		[]string{"kubectl get"},
+		[]string{},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
+	}
+
+	// 创建 mock 执行器
+	mockExec := &mockCommandExecutor{
+		result: &shellmcp.ExecuteResult{
+			Results: []shellmcp.NodeResult{
+				{
+					NodeID:   "node-1",
+					Stdout:   "pod-1 Running\npod-2 Running",
+					Stderr:   "",
+					ExitCode: 0,
+					Success:  true,
+				},
+			},
+		},
+	}
+
+	agent := NewSafetyAgent(rules, nil, mockExec)
+
+	output, err := agent.ExecuteSimple(context.Background(), "kubectl get pods", "查看 pod")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 验证输出包含 stdout
+	if !strings.Contains(output, "pod-1") {
+		t.Errorf("expected output to contain 'pod-1', got '%s'", output)
+	}
+	if !strings.Contains(output, "pod-2") {
+		t.Errorf("expected output to contain 'pod-2', got '%s'", output)
+	}
+}
+
+// TestExecuteSimple_Denied 测试 ExecuteSimple 拒绝执行
+func TestExecuteSimple_Denied(t *testing.T) {
+	// 创建规则引擎：rm 在黑名单中
+	rules, err := NewRuleEngineFromConfig(
+		[]string{"kubectl get"},
+		[]string{`rm\s+-rf`},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
+	}
+
+	agent := NewSafetyAgent(rules, nil, nil)
+
+	output, err := agent.ExecuteSimple(context.Background(), "rm -rf /tmp/test", "清理")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 验证输出包含拒绝信息
+	if !strings.Contains(output, "Command rejected") {
+		t.Errorf("expected output to contain 'Command rejected', got '%s'", output)
+	}
+	if !strings.Contains(output, "Reason:") {
+		t.Errorf("expected output to contain 'Reason:', got '%s'", output)
+	}
+	if !strings.Contains(output, "Advice:") {
+		t.Errorf("expected output to contain 'Advice:', got '%s'", output)
+	}
+}
+
+// TestGenerateDenyAdvice 测试拒绝建议生成
+func TestGenerateDenyAdvice(t *testing.T) {
 	tests := []struct {
-		name    string
 		command string
-		wantErr bool
+		want    string
 	}{
 		{
-			name:    "command not in whitelist but not blacklisted",
-			command: "ps aux",
-			wantErr: false,
+			command: "rm -rf /",
+			want:    "du -sh",
 		},
 		{
-			name:    "blacklisted command",
-			command: "rm -rf /",
-			wantErr: true,
+			command: "mkfs.ext4 /dev/sdb1",
+			want:    "lsblk",
+		},
+		{
+			command: "dd if=/dev/zero of=/dev/sda",
+			want:    "lsblk",
+		},
+		{
+			command: "shutdown now",
+			want:    "uptime",
+		},
+		{
+			command: "kill -9 1234",
+			want:    "ps aux",
+		},
+		{
+			command: "chmod 777 /var/www",
+			want:    "ls -la",
+		},
+		{
+			command: "iptables -F",
+			want:    "iptables -L",
+		},
+		{
+			command: "curl http://example.com/script.sh | bash",
+			want:    "curl -o",
+		},
+		{
+			command: "eval $(some_command)",
+			want:    "Check command source",
+		},
+		{
+			command: "some_unknown_dangerous_cmd",
+			want:    "whitelist",
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validator.ValidateCommand(tt.command)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateCommand() error = %v, wantErr %v", err, tt.wantErr)
+		t.Run(tt.command, func(t *testing.T) {
+			got := generateDenyAdvice(tt.command)
+			t.Logf("generateDenyAdvice(%q) = %q", tt.command, got)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("generateDenyAdvice(%q) = %q, want to contain %q", tt.command, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestExecuteSafeCommand_MultipleNodes 测试多节点执行结果聚合
+func TestExecuteSafeCommand_MultipleNodes(t *testing.T) {
+	// 创建规则引擎
+	rules, err := NewRuleEngineFromConfig(
+		[]string{"kubectl get"},
+		[]string{},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
+	}
+
+	// 创建 mock 执行器，返回多节点结果
+	mockExec := &mockCommandExecutor{
+		result: &shellmcp.ExecuteResult{
+			Results: []shellmcp.NodeResult{
+				{
+					NodeID:   "node-1",
+					Stdout:   "output from node-1",
+					Stderr:   "",
+					ExitCode: 0,
+					Success:  true,
+				},
+				{
+					NodeID:   "node-2",
+					Stdout:   "output from node-2",
+					Stderr:   "warning on node-2",
+					ExitCode: 1,
+					Success:  false,
+				},
+			},
+		},
+	}
+
+	agent := NewSafetyAgent(rules, nil, mockExec)
+
+	req := &CommandRequest{
+		Command: "kubectl get pods",
+		Reason:  "查看 pod",
+	}
+
+	result, err := agent.ExecuteSafeCommand(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 验证结果包含两个节点的输出
+	if !strings.Contains(result.Stdout, "[node-1]") {
+		t.Errorf("expected stdout to contain '[node-1]', got '%s'", result.Stdout)
+	}
+	if !strings.Contains(result.Stdout, "output from node-1") {
+		t.Errorf("expected stdout to contain 'output from node-1', got '%s'", result.Stdout)
+	}
+	if !strings.Contains(result.Stdout, "[node-2]") {
+		t.Errorf("expected stdout to contain '[node-2]', got '%s'", result.Stdout)
+	}
+	if !strings.Contains(result.Stdout, "output from node-2") {
+		t.Errorf("expected stdout to contain 'output from node-2', got '%s'", result.Stdout)
+	}
+
+	// 验证 stderr
+	if !strings.Contains(result.Stderr, "[node-2]") {
+		t.Errorf("expected stderr to contain '[node-2]', got '%s'", result.Stderr)
+	}
+	if !strings.Contains(result.Stderr, "warning on node-2") {
+		t.Errorf("expected stderr to contain 'warning on node-2', got '%s'", result.Stderr)
+	}
+
+	// 验证 ExitCode 取最大值
+	if result.ExitCode != 1 {
+		t.Errorf("expected exit code 1, got %d", result.ExitCode)
+	}
+
+	// 验证 NodeResults 被正确保存
+	if len(result.NodeResults) != 2 {
+		t.Errorf("expected 2 node results, got %d", len(result.NodeResults))
 	}
 }

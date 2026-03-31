@@ -1,0 +1,140 @@
+package diagnosis
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
+)
+
+// CompressNode 压缩节点
+type CompressNode struct {
+	threshold  int // 默认 4
+	recentKeep int // 默认 3
+}
+
+// NewCompressNode 创建新的压缩节点
+func NewCompressNode(threshold, recentKeep int) *CompressNode {
+	if threshold <= 0 {
+		threshold = 4
+	}
+	if recentKeep <= 0 {
+		recentKeep = 3
+	}
+	return &CompressNode{
+		threshold:  threshold,
+		recentKeep: recentKeep,
+	}
+}
+
+// Execute 执行压缩
+func (n *CompressNode) Execute(ctx context.Context, s *state.State) (*state.State, error) {
+	logger.Info("CompressNode: checking if compression needed",
+		logger.Int("history_length", len(s.ReasoningHistory)),
+		logger.Int("threshold", n.threshold))
+
+	// 1. 如果历史长度 <= threshold，直接返回
+	if len(s.ReasoningHistory) <= n.threshold {
+		logger.Info("CompressNode: no compression needed")
+		return s, nil
+	}
+
+	// 2. 计算需要压缩的早期步骤
+	historyLen := len(s.ReasoningHistory)
+	earlyStepsCount := historyLen - n.recentKeep
+
+	if earlyStepsCount <= 0 {
+		logger.Info("CompressNode: not enough steps to compress")
+		return s, nil
+	}
+
+	earlySteps := s.ReasoningHistory[:earlyStepsCount]
+	recentSteps := s.ReasoningHistory[earlyStepsCount:]
+
+	// 3. 压缩早期步骤
+	summary := n.ruleSummarize(earlySteps)
+
+	// 4. 更新 CompressedSummary
+	if s.CompressedSummary != "" {
+		s.CompressedSummary = s.CompressedSummary + "\n" + summary
+	} else {
+		s.CompressedSummary = summary
+	}
+
+	// 5. 保留最近 recentKeep 轮
+	s.ReasoningHistory = recentSteps
+
+	logger.Info("CompressNode: compression completed",
+		logger.Int("compressed_steps", earlyStepsCount),
+		logger.Int("remaining_steps", len(s.ReasoningHistory)))
+
+	return s, nil
+}
+
+// ruleSummarize 对步骤进行摘要
+func (n *CompressNode) ruleSummarize(steps []state.ReasoningStep) string {
+	var summaries []string
+	for i, step := range steps {
+		keyFinding := n.extractKeyFinding(step.Observation)
+		summary := fmt.Sprintf("步骤%d: %s → %s", i+1, step.Decision, keyFinding)
+		summaries = append(summaries, summary)
+	}
+	return strings.Join(summaries, "\n")
+}
+
+// extractKeyFinding 从 Observation 中提取关键发现
+func (n *CompressNode) extractKeyFinding(observation string) string {
+	if observation == "" {
+		return "无观察结果"
+	}
+
+	// 定义关键词列表
+	keywords := []string{
+		"ERROR",
+		"错误",
+		"异常",
+		"失败",
+		"CrashLoop",
+		"OOMKilled",
+		"ImagePullBackOff",
+		"Pending",
+		"Evicted",
+		"Failed",
+		"NotReady",
+	}
+
+	lines := strings.Split(observation, "\n")
+	var keyLines []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		upperLine := strings.ToUpper(line)
+		for _, keyword := range keywords {
+			if strings.Contains(upperLine, strings.ToUpper(keyword)) {
+				keyLines = append(keyLines, line)
+				break
+			}
+		}
+
+		// 最多提取 3 行
+		if len(keyLines) >= 3 {
+			break
+		}
+	}
+
+	if len(keyLines) == 0 {
+		// 如果没有关键词，返回前 100 个字符
+		if len(observation) > 100 {
+			return observation[:100] + "..."
+		}
+		return observation
+	}
+
+	return strings.Join(keyLines, "; ")
+}

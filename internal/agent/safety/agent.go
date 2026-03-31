@@ -1,4 +1,3 @@
-// Package safety 提供命令安全执行 Agent
 package safety
 
 import (
@@ -6,307 +5,339 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client"
-	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shellmcp"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
-// ShellClient Shell 客户端接口
-type ShellClient interface {
-	ExecuteCommand(ctx context.Context, command string) (*shell.ExecuteResult, error)
-	ListTools(ctx context.Context) ([]client.Tool, error)
+// CommandRequest represents a command execution request
+type CommandRequest struct {
+	Command     string
+	Reason      string
+	Source      string
+	Iteration   int
+	ContextInfo map[string]string
 }
 
-// Agent Safety Agent，负责安全执行命令
-type Agent struct {
-	validator *Validator
-	client    ShellClient
-	tools     []client.Tool // 动态加载的工具列表
+// CommandResult represents the result of command execution
+type CommandResult struct {
+	Stdout    string
+	Stderr    string
+	ExitCode  int
+	AuditInfo *AuditInfo
+	Output    string // Shell MCP 执行输出
+	IsError   bool   // 是否执行出错
 }
 
-// NewAgent 创建新的 Safety Agent
-func NewAgent(client ShellClient, configPath string, llmAuditor LLMAuditor) (*Agent, error) {
-	// 创建验证器（传入 LLM 审计器）
-	validator, err := NewValidator(configPath, llmAuditor)
+// AuditInfo contains safety audit information
+type AuditInfo struct {
+	Allowed     bool
+	SafetyLevel string // safe / warning / dangerous
+	Reason      string
+	Advice      string
+	Method      string // rule / llm
+}
+
+// Auditor is the interface for safety auditors
+type Auditor interface {
+	Audit(ctx context.Context, command, reason string) (*AuditResult, error)
+}
+
+// CommandExecutor is the interface for command execution
+type CommandExecutor interface {
+	ExecuteCommand(ctx context.Context, command string) (*shellmcp.ExecuteResult, error)
+}
+
+// SafetyAgent is the safety command execution agent
+type SafetyAgent struct {
+	rules     *RuleEngine
+	auditor   Auditor
+	mcpClient CommandExecutor
+}
+
+// NewSafetyAgent creates a new SafetyAgent
+func NewSafetyAgent(rules *RuleEngine, auditor Auditor, mcpClient CommandExecutor) *SafetyAgent {
+	return &SafetyAgent{
+		rules:     rules,
+		auditor:   auditor,
+		mcpClient: mcpClient,
+	}
+}
+
+// ExecuteSafeCommand audits and executes a command safely
+func (a *SafetyAgent) ExecuteSafeCommand(ctx context.Context, req *CommandRequest) (*CommandResult, error) {
+	logger.Info("Starting safety command audit",
+		logger.String("command", req.Command),
+		logger.String("reason", req.Reason),
+	)
+
+	// 1. Rule engine evaluation
+	ruleResult := a.rules.Evaluate(req.Command)
+
+	logger.Info("Rule engine evaluation completed",
+		logger.String("command", req.Command),
+		logger.String("action", ruleResult.Action),
+		logger.String("reason", ruleResult.Reason),
+	)
+
+	// 2. Branch based on rule result
+	switch ruleResult.Action {
+	case "allow":
+		// Whitelist command, execute directly (skip LLM)
+		logger.Info("Whitelist command, skipping LLM audit",
+			logger.String("command", req.Command),
+		)
+		return a.executeCommand(ctx, req, &AuditInfo{
+			Allowed:     true,
+			SafetyLevel: "safe",
+			Reason:      ruleResult.Reason,
+			Advice:      "",
+			Method:      "rule",
+		})
+
+	case "deny":
+		// Blacklist command, reject immediately (no LLM)
+		advice := generateDenyAdvice(req.Command)
+		logger.Warn("Blacklist command rejected",
+			logger.String("command", req.Command),
+			logger.String("reason", ruleResult.Reason),
+		)
+		return &CommandResult{
+			AuditInfo: &AuditInfo{
+				Allowed:     false,
+				SafetyLevel: "dangerous",
+				Reason:      ruleResult.Reason,
+				Advice:      advice,
+				Method:      "rule",
+			},
+		}, nil
+
+	case "unknown":
+		// Unknown command, need LLM audit
+		return a.auditAndExecute(ctx, req)
+
+	default:
+		// Unknown action, fallback to deny
+		logger.Error("Unknown rule evaluation result",
+			logger.String("command", req.Command),
+			logger.String("action", ruleResult.Action),
+		)
+		return &CommandResult{
+			AuditInfo: &AuditInfo{
+				Allowed:     false,
+				SafetyLevel: "dangerous",
+				Reason:      "Rule engine returned unknown action: " + ruleResult.Action,
+				Advice:      "Please contact administrator to check rule configuration",
+				Method:      "rule",
+			},
+		}, nil
+	}
+}
+
+// auditAndExecute performs LLM audit and executes if safe
+func (a *SafetyAgent) auditAndExecute(ctx context.Context, req *CommandRequest) (*CommandResult, error) {
+	// LLM unavailable, fallback to deny
+	if a.auditor == nil {
+		logger.Warn("LLM auditor unavailable, defaulting to deny for unknown command",
+			logger.String("command", req.Command),
+		)
+		return &CommandResult{
+			AuditInfo: &AuditInfo{
+				Allowed:     false,
+				SafetyLevel: "dangerous",
+				Reason:      "Unknown command and LLM auditor unavailable",
+				Advice:      "Please configure LLM auditor or use whitelist commands",
+				Method:      "rule",
+			},
+		}, nil
+	}
+
+	// Call LLM audit
+	auditResult, err := a.auditor.Audit(ctx, req.Command, req.Reason)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create validator: %w", err)
+		logger.Error("LLM audit failed",
+			logger.String("command", req.Command),
+			logger.Err(err),
+		)
+		return nil, fmt.Errorf("llm audit failed: %w", err)
 	}
 
-	agent := &Agent{
-		validator: validator,
-		client:    client,
+	// LLM returned nil (timeout/failure), fallback to deny
+	if auditResult == nil {
+		logger.Warn("LLM audit returned nil, fallback to deny",
+			logger.String("command", req.Command),
+		)
+		return &CommandResult{
+			AuditInfo: &AuditInfo{
+				Allowed:     false,
+				SafetyLevel: "dangerous",
+				Reason:      "LLM audit timeout or failure",
+				Advice:      "Please retry later or use whitelist commands",
+				Method:      "llm",
+			},
+		}, nil
 	}
 
-	// 加载工具列表（严格启动检查）
-	ctx := context.Background()
-	if err := agent.LoadTools(ctx); err != nil {
-		logger.Fatal("Failed to load tools during Safety Agent initialization", logger.Err(err))
-		return nil, fmt.Errorf("failed to load tools: %w", err)
-	}
+	logger.Info("LLM audit completed",
+		logger.String("command", req.Command),
+		logger.String("safety_level", auditResult.SafetyLevel),
+		logger.String("reason", auditResult.Reason),
+	)
 
-	return agent, nil
+	// Decide based on LLM audit result
+	switch auditResult.SafetyLevel {
+	case "safe", "warning":
+		// Allow execution
+		return a.executeCommand(ctx, req, &AuditInfo{
+			Allowed:     true,
+			SafetyLevel: auditResult.SafetyLevel,
+			Reason:      auditResult.Reason,
+			Advice:      auditResult.Advice,
+			Method:      "llm",
+		})
+
+	case "dangerous":
+		// Reject execution
+		logger.Warn("LLM determined command is dangerous, rejecting",
+			logger.String("command", req.Command),
+			logger.String("reason", auditResult.Reason),
+			logger.String("advice", auditResult.Advice),
+		)
+		return &CommandResult{
+			AuditInfo: &AuditInfo{
+				Allowed:     false,
+				SafetyLevel: "dangerous",
+				Reason:      auditResult.Reason,
+				Advice:      auditResult.Advice,
+				Method:      "llm",
+			},
+		}, nil
+
+	default:
+		// Unknown safety level, fallback to deny
+		logger.Error("LLM returned unknown safety level",
+			logger.String("command", req.Command),
+			logger.String("safety_level", auditResult.SafetyLevel),
+		)
+		return &CommandResult{
+			AuditInfo: &AuditInfo{
+				Allowed:     false,
+				SafetyLevel: "dangerous",
+				Reason:      "LLM returned unknown safety level: " + auditResult.SafetyLevel,
+				Advice:      "Please contact administrator to check LLM configuration",
+				Method:      "llm",
+			},
+		}, nil
+	}
 }
 
-// NewAgentWithValidator 使用自定义验证器创建 Safety Agent
-func NewAgentWithValidator(client ShellClient, validator *Validator) (*Agent, error) {
-	agent := &Agent{
-		validator: validator,
-		client:    client,
-	}
+// executeCommand executes the command
+func (a *SafetyAgent) executeCommand(ctx context.Context, req *CommandRequest, auditInfo *AuditInfo) (*CommandResult, error) {
+	logger.Info("Executing command",
+		logger.String("command", req.Command),
+		logger.String("safety_level", auditInfo.SafetyLevel),
+	)
 
-	// 加载工具列表（严格启动检查）
-	ctx := context.Background()
-	if err := agent.LoadTools(ctx); err != nil {
-		logger.Fatal("Failed to load tools during Safety Agent initialization", logger.Err(err))
-		return nil, fmt.Errorf("failed to load tools: %w", err)
-	}
-
-	return agent, nil
-}
-
-// LoadTools 加载 Shell MCP Server 的工具列表
-// 该方法在 Agent 初始化时调用，确保工具列表在启动时加载成功
-func (a *Agent) LoadTools(ctx context.Context) error {
-	logger.Info("Loading tools from Shell MCP Server...")
-
-	// 调用 ShellClient.ListTools 获取工具列表
-	tools, err := a.client.ListTools(ctx)
+	execResult, err := a.mcpClient.ExecuteCommand(ctx, req.Command)
 	if err != nil {
-		// 严格启动检查：工具加载失败时Fatal
-		logger.Error("Failed to list tools from Shell MCP Server", logger.Err(err))
-		return fmt.Errorf("failed to list tools from Shell MCP Server: %w", err)
+		logger.Error("Command execution failed",
+			logger.String("command", req.Command),
+			logger.Err(err),
+		)
+		return nil, fmt.Errorf("execute command: %w", err)
 	}
 
-	// 存储工具列表
-	a.tools = tools
+	logger.Info("Command execution completed",
+		logger.String("command", req.Command),
+		logger.String("summary", execResult.Summary),
+		logger.Any("is_error", execResult.IsError),
+	)
 
-	// 将工具列表传递给 Validator
-	a.validator.SetTools(tools)
-
-	logger.Info("Tools loaded successfully",
-		logger.Int("tool_count", len(tools)))
-
-	return nil
+	return &CommandResult{
+		Stdout:    execResult.Output,
+		Stderr:    "",
+		ExitCode:  0,
+		AuditInfo: auditInfo,
+		Output:    execResult.Output,
+		IsError:   execResult.IsError,
+	}, nil
 }
 
-// ExecuteSafeCommand 安全执行命令
-// 如果命令通过安全验证，则执行并返回输出
-// 如果命令不安全，返回 UnsafeCommandError
-func (a *Agent) ExecuteSafeCommand(ctx context.Context, command string) (string, error) {
-	//1. 验证命令安全性
-	if err := a.validator.ValidateCommand(command); err != nil {
-		logger.Warn("[Safety] Command rejected", logger.String("command", command), logger.Err(err))
+// ExecuteSimple is a simplified command execution (returns output string or error description)
+func (a *SafetyAgent) ExecuteSimple(ctx context.Context, command, reason string) (string, error) {
+	req := &CommandRequest{
+		Command: command,
+		Reason:  reason,
+		Source:  "simple",
+	}
+
+	result, err := a.ExecuteSafeCommand(ctx, req)
+	if err != nil {
 		return "", err
 	}
 
-	logger.Info("[Safety] Command approved", logger.String("command", command))
-
-	//2. 执行命令
-	result, err := a.client.ExecuteCommand(ctx, command)
-	if err != nil {
-		logger.Error("[Safety] Command execution failed", logger.String("command", command), logger.Err(err))
-		return "", fmt.Errorf("failed to execute command: %w", err)
+	// If audit failed, return formatted rejection message
+	if !result.AuditInfo.Allowed {
+		msg := fmt.Sprintf("Command rejected: %s\n", command)
+		msg += fmt.Sprintf("Reason: %s\n", result.AuditInfo.Reason)
+		if result.AuditInfo.Advice != "" {
+			msg += fmt.Sprintf("Advice: %s\n", result.AuditInfo.Advice)
+		}
+		return msg, nil
 	}
 
-	//3. 格式化输出
-	output := a.formatOutput(result)
-	logger.Info("[Safety] Command executed successfully", logger.String("command", command))
-
-	return output, nil
+	// Return aggregated stdout
+	return result.Stdout, nil
 }
 
-// ExecuteSafeCommandWithAudit 安全执行命令（带 LLM 审计）
-// 执行完整的审计流程：规则验证 -> LLM 审计 -> MCP 客户端执行
-// 返回格式化的输出，包含审计结果和执行结果
-func (a *Agent) ExecuteSafeCommandWithAudit(ctx context.Context, command string, contextInfo map[string]interface{}) (string, error) {
-	// 1. 执行规则验证和 LLM 审计
-	auditResult, err := a.validator.ValidateCommandWithAudit(ctx, command, contextInfo)
-	if err != nil {
-		// 审计拒绝（包括规则验证失败和 LLM 审计拒绝）
-		if IsUnsafeCommand(err) {
-			logger.Warn("[Safety] Command rejected by audit", logger.String("command", command), logger.Err(err))
-			return "", err
-		}
-		// 其他错误（如 LLM 审计失败）
-		logger.Error("[Safety] Audit error", logger.String("command", command), logger.Err(err))
-		return "", err
+// generateDenyAdvice generates advice for denied commands
+func generateDenyAdvice(command string) string {
+	lowerCmd := strings.ToLower(command)
+
+	// rm related commands
+	if strings.Contains(lowerCmd, "rm ") || strings.HasPrefix(lowerCmd, "rm") {
+		return "Use 'du -sh <path>' to check directory size, or 'ls -la <path>' to verify contents before operation"
 	}
 
-	// 2. 审计通过，记录审计结果
-	if auditResult != nil {
-		switch auditResult.SafetyLevel {
-		case SafetyLevelSafe:
-			logger.Info("[Safety] Audit passed: Safe", logger.String("command", command))
-		case SafetyLevelWarning:
-			logger.Info("[Safety] Audit passed: Warning", logger.String("command", command), logger.String("reason", auditResult.Reason))
-		case SafetyLevelDangerous:
-			logger.Warn("[Safety] Audit passed: Dangerous but allowed", logger.String("command", command), logger.String("reason", auditResult.Reason))
-		}
+	// mkfs related commands
+	if strings.Contains(lowerCmd, "mkfs") {
+		return "Use 'lsblk' or 'fdisk -l' to check disk partition information and confirm target device"
 	}
 
-	// 3. 调用 MCP 客户端执行命令
-	logger.Info("[Safety] Executing command via MCP client", logger.String("command", command))
-	result, err := a.client.ExecuteCommand(ctx, command)
-	if err != nil {
-		logger.Error("[Safety] MCP execution failed", logger.String("command", command), logger.Err(err))
-		return "", fmt.Errorf("MCP execution failed: %w", err)
+	// dd related commands
+	if strings.Contains(lowerCmd, "dd ") || strings.HasPrefix(lowerCmd, "dd") {
+		return "Use 'lsblk' to check block device information and confirm input/output file paths"
 	}
 
-	// 4. 格式化输出（包含审计信息和执行结果）
-	output := a.formatOutputWithAudit(result, auditResult)
-	logger.Info("[Safety] Command executed successfully via MCP", logger.String("command", command))
-
-	return output, nil
-}
-
-// ExecuteSafeCommandWithTimeout 安全执行命令（带超时）
-func (a *Agent) ExecuteSafeCommandWithTimeout(ctx context.Context, command string, timeout int) (string, error) {
-	//1. 验证命令安全性
-	if err := a.validator.ValidateCommand(command); err != nil {
-		logger.Warn("[Safety] Command rejected", logger.String("command", command), logger.Err(err))
-		return "", err
+	// shutdown/reboot related commands
+	if strings.Contains(lowerCmd, "shutdown") || strings.Contains(lowerCmd, "reboot") || strings.Contains(lowerCmd, "poweroff") {
+		return "Use 'uptime' to check system uptime, or 'systemctl status' to check service status"
 	}
 
-	logger.Info("[Safety] Command approved", logger.String("command", command))
-
-	//2. 执行命令（带超时）
-	var result *shell.ExecuteResult
-	var err error
-
-	if timeout > 0 {
-		// 如果客户端支持超时，使用 ExecuteCommandWithTimeout
-		if client, ok := a.client.(interface {
-			ExecuteCommandWithTimeout(ctx context.Context, command string, timeout int) (*shell.ExecuteResult, error)
-		}); ok {
-			result, err = client.ExecuteCommandWithTimeout(ctx, command, timeout)
-		} else {
-			// 回退到普通执行
-			result, err = a.client.ExecuteCommand(ctx, command)
-		}
-	} else {
-		result, err = a.client.ExecuteCommand(ctx, command)
+	// kill related commands
+	if strings.Contains(lowerCmd, "kill") || strings.Contains(lowerCmd, "pkill") {
+		return "Use 'ps aux | grep <pattern>' to check process information, or 'top' to check system resource usage"
 	}
 
-	if err != nil {
-		logger.Error("[Safety] Command execution failed", logger.String("command", command), logger.Err(err))
-		return "", fmt.Errorf("failed to execute command: %w", err)
+	// chmod 777 related commands
+	if strings.Contains(lowerCmd, "chmod 777") || strings.Contains(lowerCmd, "chmod -R 777") {
+		return "Use 'ls -la <path>' to check current permissions, consider using stricter permissions like 755 or 644"
 	}
 
-	//3. 格式化输出
-	output := a.formatOutput(result)
-	logger.Info("[Safety] Command executed successfully", logger.String("command", command))
-
-	return output, nil
-}
-
-// ValidateCommand 仅验证命令安全性，不执行
-func (a *Agent) ValidateCommand(command string) error {
-	return a.validator.ValidateCommand(command)
-}
-
-// formatOutput 格式化命令执行结果
-func (a *Agent) formatOutput(result *shell.ExecuteResult) string {
-	if result == nil {
-		return ""
+	// iptables related commands
+	if strings.Contains(lowerCmd, "iptables -f") || strings.Contains(lowerCmd, "iptables --flush") {
+		return "Use 'iptables -L -v -n' to view current rules, or 'iptables -L --line-numbers' to view rule numbers"
 	}
 
-	// 使用摘要作为输出
-	output := result.FormatSummary()
-
-	// 如果有成功的输出，追加到结果中
-	successOutputs := result.GetSuccessOutput()
-	if len(successOutputs) > 0 {
-		output += "\n\nOutput:\n"
-		for _, out := range successOutputs {
-			output += out + "\n"
-		}
+	// curl | sh related commands
+	if strings.Contains(lowerCmd, "curl") && strings.Contains(lowerCmd, "|") && (strings.Contains(lowerCmd, "sh") || strings.Contains(lowerCmd, "bash")) {
+		return "Download script locally first using 'curl -o script.sh <url>', then review manually before execution"
 	}
 
-	// 如果有失败的输出，追加到结果中
-	failureOutputs := result.GetFailureOutput()
-	if len(failureOutputs) > 0 {
-		output += "\n\nErrors:\n"
-		for _, out := range failureOutputs {
-			output += out + "\n"
-		}
+	// eval/exec related commands
+	if strings.Contains(lowerCmd, "eval ") || strings.Contains(lowerCmd, "exec ") {
+		return "Check command source to avoid executing untrusted dynamic code"
 	}
 
-	return output
-}
-
-// formatOutputWithAudit 格式化命令执行结果（包含审计信息）
-func (a *Agent) formatOutputWithAudit(result *shell.ExecuteResult, auditResult *AuditResult) string {
-	if result == nil {
-		return ""
-	}
-
-	var output strings.Builder
-
-	// 1. 添加审计结果
-	if auditResult != nil {
-		output.WriteString("## 审计结果\n\n")
-		switch auditResult.SafetyLevel {
-		case SafetyLevelSafe:
-			output.WriteString("✅ 安全级别: 安全\n")
-		case SafetyLevelWarning:
-			output.WriteString("⚠️ 安全级别: 警告\n")
-		case SafetyLevelDangerous:
-			output.WriteString("🔴 安全级别: 危险（但已允许）\n")
-		}
-
-		if auditResult.Reason != "" {
-			output.WriteString(fmt.Sprintf("审计理由: %s\n", auditResult.Reason))
-		}
-
-		if auditResult.Advice != "" {
-			output.WriteString(fmt.Sprintf("建议: %s\n", auditResult.Advice))
-		}
-
-		output.WriteString("\n")
-	}
-
-	// 2. 添加执行结果摘要
-	output.WriteString("## 执行结果\n\n")
-	output.WriteString(result.FormatSummary())
-	output.WriteString("\n")
-
-	// 3. 如果有成功的输出，追加到结果中
-	successOutputs := result.GetSuccessOutput()
-	if len(successOutputs) > 0 {
-		output.WriteString("\n### 输出\n\n")
-		for _, out := range successOutputs {
-			output.WriteString(out + "\n")
-		}
-	}
-
-	// 4. 如果有失败的输出，追加到结果中
-	failureOutputs := result.GetFailureOutput()
-	if len(failureOutputs) > 0 {
-		output.WriteString("\n### 错误\n\n")
-		for _, out := range failureOutputs {
-			output.WriteString(out + "\n")
-		}
-	}
-
-	return output.String()
-}
-
-// GetValidator 获取验证器
-func (a *Agent) GetValidator() *Validator {
-	return a.validator
-}
-
-// GetClient 获取 Shell 客户端
-func (a *Agent) GetClient() ShellClient {
-	return a.client
-}
-
-// GetConfig 获取安全配置
-func (a *Agent) GetConfig() *SecurityConfig {
-	return a.validator.GetConfig()
-}
-
-// GetTools 获取工具列表
-func (a *Agent) GetTools() []client.Tool {
-	return a.tools
+	// Default advice
+	return "Use read-only commands from the whitelist, or contact administrator to add necessary safety rules"
 }
