@@ -77,6 +77,40 @@ const decisionPromptTemplate = `你是一个 Kubernetes 集群诊断专家。你
 - 如果已达到第 {max_iterations} 轮 → 必须 decision = "report"
 - tool_calls 每轮最多 3 个工具调用`
 
+// 验证阶段决策 Prompt 模板
+const verifyDecisionPromptTemplate = `你是一个 Kubernetes 诊断专家，当前处于验证阶段。
+初步诊断已完成，现在需要对以下疑点进行验证性查询。
+
+## 初步根因
+{initial_root_cause}
+
+## 待验证疑点清单
+{recommendations_checklist}
+
+## 已执行的验证查询
+{verify_executions}
+
+## 当前进度
+第 {verify_iter}/{max_verify_iter} 轮验证迭代。
+
+## 可用工具
+{tools_list}
+
+## 严格约束（必须遵守）
+- 只验证上面清单中的疑点，不得开展新的调查方向
+- tool_calls 的参数必须指向清单中明确提到的资源（命名空间、Pod 名、资源类型）
+- 每轮最多 2 个 tool_calls
+- 如果清单中的疑点已基本验证完毕，或已达到最大验证轮数，必须 decision=report
+
+## 输出格式（严格 JSON，不要包含其他内容）
+{
+  "thought": "你分析了哪个疑点、选择了哪个工具、为什么",
+  "decision": "continue 或 report",
+  "tool_calls": [
+    { "name": "工具名", "args": { "参数名": "参数值" } }
+  ]
+}`
+
 // SynthesizePrompt 模板
 const synthesizePromptTemplate = `{verify_phase_header}你是一个 Kubernetes 集群诊断报告撰写专家。请根据以下诊断数据生成一份结构化的中文诊断报告。
 
@@ -224,6 +258,11 @@ func BuildDecisionPrompt(s *state.State) string {
 		return ""
 	}
 
+	// 验证阶段使用专用 Prompt
+	if s.VerifyPhase {
+		return BuildVerifyDecisionPrompt(s)
+	}
+
 	// 构建异常 Pod 信息
 	abnormalPods := "无"
 	if s.K8sInfo != nil {
@@ -278,6 +317,55 @@ func BuildDecisionPrompt(s *state.State) string {
 	)
 
 	return replacer.Replace(decisionPromptTemplate)
+}
+
+// BuildVerifyDecisionPrompt 构建验证阶段决策 Prompt
+func BuildVerifyDecisionPrompt(s *state.State) string {
+	if s == nil || s.AnalysisResult == nil {
+		return ""
+	}
+
+	// 构建待验证清单
+	var checklistItems []string
+	for i, rec := range s.AnalysisResult.Recommendations {
+		status := "尚未验证"
+		if rec.Verified {
+			status = "已验证"
+		}
+		checklistItems = append(checklistItems,
+			fmt.Sprintf("%d. [%s] %s", i+1, status, rec.Action))
+	}
+	checklist := strings.Join(checklistItems, "\n")
+
+	// 构建已执行的验证查询摘要
+	verifyExecs := "无"
+	execs := s.GetVerifyPhaseExecutions()
+	if len(execs) > 0 {
+		var execStrs []string
+		for _, e := range execs {
+			status := "成功"
+			if !e.Success {
+				status = "失败"
+			}
+			execStrs = append(execStrs, fmt.Sprintf("- %s (%s)", e.Command, status))
+		}
+		verifyExecs = strings.Join(execStrs, "\n")
+	}
+
+	rootCause := s.AnalysisResult.RootCause
+	if rootCause == "" {
+		rootCause = "未明确"
+	}
+
+	replacer := strings.NewReplacer(
+		"{initial_root_cause}", rootCause,
+		"{recommendations_checklist}", checklist,
+		"{verify_executions}", verifyExecs,
+		"{verify_iter}", fmt.Sprintf("%d", s.VerifyIterationCount),
+		"{max_verify_iter}", fmt.Sprintf("%d", s.MaxVerifyIterations),
+		"{tools_list}", defaultToolsList,
+	)
+	return replacer.Replace(verifyDecisionPromptTemplate)
 }
 
 // BuildSynthesizePrompt 构建报告合成 Prompt

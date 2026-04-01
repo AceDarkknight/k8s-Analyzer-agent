@@ -144,14 +144,12 @@ type AnalysisResult struct {
 
 // Recommendation 修复建议
 type Recommendation struct {
-	Priority string // high / medium / low
-	Action   string
-	Command  string
-	Risk     string
-	// 新增字段
-	Executable   bool   // 是否为只读/安全可执行的验证命令（由 LLM 生成时标注）
-	Verified     bool   // 是否已被 agent 验证执行过
-	VerifyResult string // 验证执行结果摘要
+	Priority     string // high / medium / low
+	Action       string
+	Command      string
+	Risk         string
+	Verified     bool   // 是否已被验证迭代覆盖
+	VerifyResult string // 验证执行结果摘要（截取前 200 字）
 }
 
 // BlockedCommand 被安全审计拒绝的命令
@@ -163,8 +161,9 @@ type BlockedCommand struct {
 
 // CommandExecution 命令执行记录
 type CommandExecution struct {
-	Command   string
-	Success   bool
-	Output    string
-	Timestamp time.Time
+	Command       string
+	Success       bool
+	Output        string
+	Timestamp     time.Time
+	IsVerifyPhase bool // 是否属于验证迭代阶段
 }

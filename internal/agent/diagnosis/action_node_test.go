@@ -14,7 +14,7 @@ func TestToolMapping(t *testing.T) {
 	}{
 		{"list_pods", "get", "pods", true},
 		{"describe_pod", "describe", "pod", true},
-		{"get_pod_logs", "logs", "pod", true},
+		{"get_pod_logs", "logs", "", true},
 		{"list_events", "get", "events", true},
 		{"list_deployments", "get", "deployments", true},
 		{"list_services", "get", "services", true},

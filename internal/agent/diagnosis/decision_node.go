@@ -37,8 +37,24 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 		logger.Int("iteration", s.GetIterationCount()),
 		logger.Int("max_iterations", s.GetMaxIterations()))
 
-	// 1. 检查是否达到 MaxIterations
-	if s.GetIterationCount() >= s.GetMaxIterations() {
+	// 验证阶段：自增计数，超限则强制 report
+	if s.VerifyPhase {
+		exceeded := s.IncrementVerifyIteration()
+		if exceeded {
+			logger.Info("DecisionNode: verify iterations exhausted, forcing report",
+				logger.Int("verify_iter", s.VerifyIterationCount),
+				logger.Int("max_verify_iter", s.MaxVerifyIterations))
+			return &DecisionOutput{
+				Decision:  "report",
+				Thought:   fmt.Sprintf("验证迭代已达上限 %d 轮，强制生成终版报告", s.MaxVerifyIterations),
+				ToolCalls: []state.ToolCall{},
+			}, nil
+		}
+		// 验证阶段使用专用 Prompt（BuildDecisionPrompt 内部自动分发）
+	}
+
+	// 主诊断阶段：检查是否达到 MaxIterations
+	if !s.VerifyPhase && s.GetIterationCount() >= s.GetMaxIterations() {
 		logger.Info("DecisionNode: max iterations reached, forcing report")
 		return &DecisionOutput{
 			Decision:  "report",
@@ -47,8 +63,10 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 		}, nil
 	}
 
-	// 2. 增加迭代计数
-	s.IncrementIteration()
+	// 主诊断阶段：增加迭代计数
+	if !s.VerifyPhase {
+		s.IncrementIteration()
+	}
 
 	// 3. 构建 prompt
 	prompt := llm.BuildDecisionPrompt(s)

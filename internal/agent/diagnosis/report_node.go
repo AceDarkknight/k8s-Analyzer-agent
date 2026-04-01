@@ -3,6 +3,7 @@ package diagnosis
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
@@ -30,6 +31,11 @@ func NewReportNode(router *llm.LLMRouter, store store.FindingStore) *ReportNode 
 // Execute 执行报告生成
 func (n *ReportNode) Execute(ctx context.Context, s *state.State) (*state.State, error) {
 	logger.Info("ReportNode: starting report generation")
+
+	// 如果是终版报告（VerifyPhase=true），先做验证结果匹配
+	if s.VerifyPhase {
+		matchVerifyResults(s)
+	}
 
 	// 1. 构建 prompt
 	prompt := llm.BuildSynthesizePrompt(s)
@@ -163,4 +169,69 @@ func (n *ReportNode) generateFallbackReport(s *state.State) {
 	result.Limitations = "LLM 服务异常，报告内容可能不完整"
 
 	s.SetAnalysisResult(result)
+}
+
+// matchVerifyResults 将验证阶段执行结果与建议进行关联（纯字符串匹配，零 LLM）
+func matchVerifyResults(s *state.State) {
+	if s.AnalysisResult == nil {
+		return
+	}
+	verifyExecs := s.GetVerifyPhaseExecutions()
+	if len(verifyExecs) == 0 {
+		return
+	}
+
+	for i := range s.AnalysisResult.Recommendations {
+		rec := &s.AnalysisResult.Recommendations[i]
+		if rec.Verified {
+			continue
+		}
+		for _, exec := range verifyExecs {
+			if !exec.Success {
+				continue
+			}
+			if commandCoversRecommendation(exec.Command, rec.Action, rec.Command) {
+				rec.Verified = true
+				output := exec.Output
+				if len(output) > 200 {
+					output = output[:200] + "..."
+				}
+				rec.VerifyResult = output
+				break
+			}
+		}
+	}
+}
+
+// commandCoversRecommendation 判断执行命令是否覆盖该建议
+// 提取建议文本中的关键实体词（命名空间、Pod名、资源类型），至少匹配 2 个
+func commandCoversRecommendation(execCmd, recAction, recCommand string) bool {
+	keywords := extractEntityKeywords(recAction + " " + recCommand)
+	matchCount := 0
+	execLower := strings.ToLower(execCmd)
+	for _, kw := range keywords {
+		if len(kw) > 3 && strings.Contains(execLower, strings.ToLower(kw)) {
+			matchCount++
+		}
+	}
+	return matchCount >= 2
+}
+
+// extractEntityKeywords 从文本中提取有意义的实体词
+func extractEntityKeywords(text string) []string {
+	// 忽略常见中文停用词和短词
+	stopWords := map[string]bool{
+		"确认": true, "检查": true, "查看": true, "修复": true, "并": true,
+		"配置": true, "命令": true, "建议": true, "操作": true,
+	}
+	var keywords []string
+	for _, w := range strings.FieldsFunc(text, func(r rune) bool {
+		return r == ' ' || r == '/' || r == '-' || r == ',' || r == '：' || r == ':'
+	}) {
+		w = strings.Trim(w, ".,;:()[]{}\"'（）")
+		if len(w) > 3 && !stopWords[w] {
+			keywords = append(keywords, w)
+		}
+	}
+	return keywords
 }

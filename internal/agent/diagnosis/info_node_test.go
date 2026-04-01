@@ -103,7 +103,7 @@ func TestParsePods(t *testing.T) {
 		]
 	}`
 
-	pods, err := parsePods(jsonData)
+	pods, err := parsePods(jsonData, "default")
 	if err != nil {
 		t.Fatalf("parsePods failed: %v", err)
 	}

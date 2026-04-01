@@ -38,11 +38,8 @@ func NewAgent(
 	compressNode := NewCompressNode(cfg.CompressThreshold, 3)
 	reportNode := NewReportNode(router, findingStore)
 
-	// 创建 VerifyNode（在 reportNode 之后）
-	verifyNode := NewVerifyNode(gw, sa, sum, cfg.MaxVerifyCommands, cfg.VerifyFullRegeneration)
-
-	// 3. 创建 Graph
-	graph := NewGraph(infoNode, decisionNode, actionNode, compressNode, reportNode, verifyNode, cfg.VerifyRecommendations)
+	// 3. 创建 Graph（验证迭代逻辑内置于 Graph.Run 中）
+	graph := NewGraph(infoNode, decisionNode, actionNode, compressNode, reportNode, cfg.VerifyRecommendations, cfg.MaxVerifyIterations)
 
 	// 4. 返回 Agent
 	return &Agent{

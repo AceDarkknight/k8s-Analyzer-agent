@@ -124,11 +124,10 @@ func ParseAnalysisResponse(content string) (*state.AnalysisResult, error) {
 	}
 
 	type recommendationJSON struct {
-		Priority   string `json:"priority"`
-		Action     string `json:"action"`
-		Command    string `json:"command"`
-		Risk       string `json:"risk"`
-		Executable bool   `json:"executable"` // 新增
+		Priority string `json:"priority"`
+		Action   string `json:"action"`
+		Command  string `json:"command"`
+		Risk     string `json:"risk"`
 	}
 
 	type analysisJSON struct {
@@ -167,11 +166,10 @@ func ParseAnalysisResponse(content string) (*state.AnalysisResult, error) {
 	// 转换 recommendations
 	for _, r := range parsed.Recommendations {
 		result.Recommendations = append(result.Recommendations, state.Recommendation{
-			Priority:   r.Priority,
-			Action:     r.Action,
-			Command:    r.Command,
-			Risk:       r.Risk,
-			Executable: r.Executable,
+			Priority: r.Priority,
+			Action:   r.Action,
+			Command:  r.Command,
+			Risk:     r.Risk,
 		})
 	}
 

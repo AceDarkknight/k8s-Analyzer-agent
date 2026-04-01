@@ -354,7 +354,6 @@ func TestParseAnalysisResponse_FullStructure(t *testing.T) {
 	assert.Equal(t, "清理磁盘", result.Recommendations[0].Action)
 	assert.Equal(t, "kubectl exec ...", result.Recommendations[0].Command)
 	assert.Equal(t, "可能删除重要日志", result.Recommendations[0].Risk)
-	assert.Equal(t, false, result.Recommendations[0].Executable)
 }
 
 func TestExtractJSON_Nested(t *testing.T) {
@@ -387,82 +386,4 @@ func TestParseDecisionResponse_ContinueFallback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "continue", result.Decision)
 	assert.Equal(t, input, result.Thought)
-}
-
-// TestParseAnalysisResponse_ExecutableField 测试 executable 字段解析
-func TestParseAnalysisResponse_ExecutableField(t *testing.T) {
-	tests := []struct {
-		name               string
-		input              string
-		expectedExecutable bool
-	}{
-		{
-			name: "executable 为 true",
-			input: `{
-				"summary": "测试",
-				"severity": "info",
-				"root_cause": "",
-				"findings": [],
-				"recommendations": [
-					{
-						"priority": "high",
-						"action": "查看 Pod 详情",
-						"command": "kubectl get pod -o yaml",
-						"risk": "无风险",
-						"executable": true
-					}
-				],
-				"limitations": ""
-			}`,
-			expectedExecutable: true,
-		},
-		{
-			name: "executable 为 false",
-			input: `{
-				"summary": "测试",
-				"severity": "info",
-				"root_cause": "",
-				"findings": [],
-				"recommendations": [
-					{
-						"priority": "high",
-						"action": "执行修复",
-						"command": "kubectl exec ...",
-						"risk": "高风险",
-						"executable": false
-					}
-				],
-				"limitations": ""
-			}`,
-			expectedExecutable: false,
-		},
-		{
-			name: "不包含 executable 字段（应默认为 false）",
-			input: `{
-				"summary": "测试",
-				"severity": "info",
-				"root_cause": "",
-				"findings": [],
-				"recommendations": [
-					{
-						"priority": "medium",
-						"action": "检查配置",
-						"command": "",
-						"risk": ""
-					}
-				],
-				"limitations": ""
-			}`,
-			expectedExecutable: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := ParseAnalysisResponse(tt.input)
-			require.NoError(t, err)
-			require.Len(t, result.Recommendations, 1)
-			assert.Equal(t, tt.expectedExecutable, result.Recommendations[0].Executable)
-		})
-	}
 }

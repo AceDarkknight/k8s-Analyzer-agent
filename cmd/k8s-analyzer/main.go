@@ -199,37 +199,31 @@ func printReport(result *state.AnalysisResult) {
 	if len(result.Recommendations) > 0 {
 		fmt.Printf("\n建议 (%d 项):\n", len(result.Recommendations))
 		for i, r := range result.Recommendations {
-			// 根据建议类型选择展示格式
+			// 确定图标和标签
+			var icon, label string
 			switch {
 			case r.Verified:
-				// 1. 已验证
-				fmt.Printf("  %d. [%s] ✅ 已验证 - %s\n", i+1, r.Priority, r.Action)
-				if r.VerifyResult != "" {
-					fmt.Printf("     验证结果: %s\n", r.VerifyResult)
-				}
-				if r.Command != "" {
-					fmt.Printf("     原始命令: %s (已执行)\n", r.Command)
-				}
-			case !r.Executable && r.Command != "":
-				// 2. 需人工操作（Executable=false 且有 Command）
-				fmt.Printf("  %d. [%s] ⚠️  需人工操作 - %s\n", i+1, r.Priority, r.Action)
-				fmt.Printf("     命令: %s (请运维人员手动执行)\n", r.Command)
-				if r.Risk != "" {
-					fmt.Printf("     风险: %s\n", r.Risk)
-				}
-			case r.Command == "":
-				// 3. 建议优化（无 Command）
-				fmt.Printf("  %d. [%s] 💡 建议优化 - %s\n", i+1, r.Priority, r.Action)
-				fmt.Printf("     说明: 属于优化类工作\n")
+				icon, label = "✅", "已验证"
+			case r.Command != "":
+				icon, label = "⚠️ ", "需人工操作"
 			default:
-				// 4. 可执行但未验证（Executable=true 且 Verified=false）
-				fmt.Printf("  %d. [%s] %s\n", i+1, r.Priority, r.Action)
-				if r.Command != "" {
+				icon, label = "💡", "建议优化"
+			}
+
+			fmt.Printf("  %d. [%s] %s %s - %s\n", i+1, r.Priority, icon, label, r.Action)
+
+			if r.Verified && r.VerifyResult != "" {
+				fmt.Printf("     验证结果: %s\n", r.VerifyResult)
+			}
+			if r.Command != "" {
+				if r.Verified {
+					fmt.Printf("     命令: %s (已执行)\n", r.Command)
+				} else {
 					fmt.Printf("     命令: %s\n", r.Command)
 				}
-				if r.Risk != "" {
-					fmt.Printf("     风险: %s\n", r.Risk)
-				}
+			}
+			if r.Risk != "" && !r.Verified {
+				fmt.Printf("     风险: %s\n", r.Risk)
 			}
 		}
 	}

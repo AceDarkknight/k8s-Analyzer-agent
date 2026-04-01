@@ -28,7 +28,7 @@ var toolMapping = map[string]struct {
 }{
 	"list_pods":        {"get", "pods"},
 	"describe_pod":     {"describe", "pod"},
-	"get_pod_logs":     {"logs", "pod"},
+	"get_pod_logs":     {"logs", ""},
 	"list_events":      {"get", "events"},
 	"list_deployments": {"get", "deployments"},
 	"list_services":    {"get", "services"},
@@ -164,7 +164,19 @@ func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc sta
 		output = resp.Stderr
 	}
 
-	return n.summarizer.Summarize(output), nil
+	summary := n.summarizer.Summarize(output)
+
+	// 记录命令执行（构建命令字符串用于显示）
+	cmdStr := fmt.Sprintf("kubectl %s %s", mapping.Verb, mapping.Resource)
+	if req.Namespace != "" {
+		cmdStr = fmt.Sprintf("kubectl -n %s %s %s", req.Namespace, mapping.Verb, mapping.Resource)
+	}
+	if req.Name != "" {
+		cmdStr += " " + req.Name
+	}
+	s.AddCommandExecution(cmdStr, resp.Status == "success", summary, s.VerifyPhase)
+
+	return summary, nil
 }
 
 // executeSafeCommand 执行安全命令
@@ -203,12 +215,7 @@ func (n *ActionNode) executeSafeCommand(ctx context.Context, s *state.State, tc 
 	}
 
 	// 记录命令执行
-	exec := state.CommandExecution{
-		Command: command,
-		Success: result.ExitCode == 0,
-		Output:  result.Stdout,
-	}
-	s.AddCommandExecution(exec)
+	s.AddCommandExecution(command, result.ExitCode == 0, result.Stdout, s.VerifyPhase)
 
 	// 摘要输出
 	output := result.Stdout

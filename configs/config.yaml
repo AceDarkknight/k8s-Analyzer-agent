@@ -45,9 +45,8 @@ agent:
   output_max_lines: 50
   output_max_chars: 3000
   finding_ttl_hours: 1
-  verify_recommendations: true    # 是否自动执行可验证建议
-  max_verify_commands: 3          # 每次最多验证几条建议命令
-  verify_full_regeneration: true  # 有新信息时是否完整重新生成终版报告（false=仅结构化补充）
+  verify_recommendations: true  # 是否启用验证迭代
+  max_verify_iterations: 2      # 验证阶段最大迭代数
 
 # 日志配置
 log:

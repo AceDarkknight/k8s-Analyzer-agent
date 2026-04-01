@@ -18,8 +18,9 @@ type State struct {
 	CommandExecutions []CommandExecution
 	BlockedCommands   []BlockedCommand
 	// 验证阶段相关字段
-	VerifyPhase           bool // 是否处于建议验证阶段（防止二次循环进入 VerifyNode）
-	NeedsFullRegeneration bool // 验证后是否需要 LLM 完整重新生成报告（Graph 路由依据）
+	VerifyPhase          bool // 是否处于验证迭代阶段
+	VerifyIterationCount int  // 验证阶段已用迭代次数
+	MaxVerifyIterations  int  // 验证阶段最大迭代数（来自 config）
 }
 
 // NewState 创建新的 State
@@ -60,9 +61,16 @@ func (s *State) AddFinding(f Finding) {
 }
 
 // AddCommandExecution 记录命令执行
-func (s *State) AddCommandExecution(exec CommandExecution) {
+func (s *State) AddCommandExecution(command string, success bool, output string, isVerifyPhase bool) {
 	if s == nil {
 		return
+	}
+	exec := CommandExecution{
+		Command:       command,
+		Success:       success,
+		Output:        output,
+		Timestamp:     time.Now(),
+		IsVerifyPhase: isVerifyPhase,
 	}
 	s.CommandExecutions = append(s.CommandExecutions, exec)
 }
@@ -251,13 +259,54 @@ func (s *State) CreateNewReasoningStep(thought, decision string) ReasoningStep {
 	}
 }
 
-// HasExecutableRecommendations 判断是否有待验证的可执行建议
-func (s *State) HasExecutableRecommendations() bool {
+// EnterVerifyPhase 进入验证阶段（由 graph 路由调用）
+func (s *State) EnterVerifyPhase(maxVerifyIter int) {
+	if s == nil {
+		return
+	}
+	s.VerifyPhase = true
+	s.VerifyIterationCount = 0
+	s.MaxVerifyIterations = maxVerifyIter
+}
+
+// IncrementVerifyIteration 自增验证迭代计数，返回是否已超限
+func (s *State) IncrementVerifyIteration() bool {
+	if s == nil {
+		return true
+	}
+	s.VerifyIterationCount++
+	return s.VerifyIterationCount > s.MaxVerifyIterations
+}
+
+// GetVerifyPhaseExecutions 获取验证阶段的命令执行记录
+func (s *State) GetVerifyPhaseExecutions() []CommandExecution {
+	if s == nil {
+		return nil
+	}
+	var result []CommandExecution
+	for _, e := range s.CommandExecutions {
+		if e.IsVerifyPhase {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// GetLastReasoningStep 获取最后一个推理步骤
+func (s *State) GetLastReasoningStep() *ReasoningStep {
+	if s == nil || len(s.ReasoningHistory) == 0 {
+		return nil
+	}
+	return &s.ReasoningHistory[len(s.ReasoningHistory)-1]
+}
+
+// HasUnverifiedRecommendations 判断是否有未验证的建议
+func (s *State) HasUnverifiedRecommendations() bool {
 	if s.AnalysisResult == nil {
 		return false
 	}
 	for _, r := range s.AnalysisResult.Recommendations {
-		if r.Executable && !r.Verified {
+		if !r.Verified {
 			return true
 		}
 	}

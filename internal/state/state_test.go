@@ -267,13 +267,7 @@ func TestAddFinding(t *testing.T) {
 func TestAddCommandExecution(t *testing.T) {
 	s := NewState("test", 10, 4)
 
-	exec := CommandExecution{
-		Command:   "kubectl get pods",
-		Success:   true,
-		Output:    "pod1\npod2",
-		Timestamp: time.Now(),
-	}
-	s.AddCommandExecution(exec)
+	s.AddCommandExecution("kubectl get pods", true, "pod1\npod2", false)
 
 	if len(s.CommandExecutions) != 1 {
 		t.Errorf("expected 1 command execution, got %d", len(s.CommandExecutions))
@@ -331,7 +325,7 @@ func TestStateMethodsWithNil(t *testing.T) {
 	// 这些方法不应该 panic
 	s.AddReasoningStep(ReasoningStep{})
 	s.AddFinding(Finding{})
-	s.AddCommandExecution(CommandExecution{})
+	s.AddCommandExecution("", false, "", false)
 	s.AddBlockedCommand(BlockedCommand{})
 	s.IncrementIteration()
 
@@ -341,71 +335,5 @@ func TestStateMethodsWithNil(t *testing.T) {
 
 	if s.GetRecentSteps(5) != nil {
 		t.Error("GetRecentSteps should return nil for nil state")
-	}
-}
-
-// TestHasExecutableRecommendations 测试 HasExecutableRecommendations
-func TestHasExecutableRecommendations(t *testing.T) {
-	// 场景1: AnalysisResult 为 nil → 返回 false
-	s1 := NewState("test", 10, 4)
-	if s1.HasExecutableRecommendations() {
-		t.Error("expected HasExecutableRecommendations to return false when AnalysisResult is nil")
-	}
-
-	// 场景2: Recommendations 为空 → 返回 false
-	s2 := NewState("test", 10, 4)
-	s2.AnalysisResult = &AnalysisResult{
-		Recommendations: []Recommendation{},
-	}
-	if s2.HasExecutableRecommendations() {
-		t.Error("expected HasExecutableRecommendations to return false when Recommendations is empty")
-	}
-
-	// 场景3: 所有 Recommendations 的 Executable=false → 返回 false
-	s3 := NewState("test", 10, 4)
-	s3.AnalysisResult = &AnalysisResult{
-		Recommendations: []Recommendation{
-			{Priority: "high", Action: "test", Executable: false, Verified: false},
-			{Priority: "medium", Action: "test2", Executable: false, Verified: false},
-		},
-	}
-	if s3.HasExecutableRecommendations() {
-		t.Error("expected HasExecutableRecommendations to return false when all recommendations are not executable")
-	}
-
-	// 场景4: 有 Executable=true 且 Verified=false → 返回 true
-	s4 := NewState("test", 10, 4)
-	s4.AnalysisResult = &AnalysisResult{
-		Recommendations: []Recommendation{
-			{Priority: "high", Action: "test", Executable: false, Verified: false},
-			{Priority: "high", Action: "verify this", Executable: true, Verified: false},
-		},
-	}
-	if !s4.HasExecutableRecommendations() {
-		t.Error("expected HasExecutableRecommendations to return true when there are unverified executable recommendations")
-	}
-
-	// 场景5: 有 Executable=true 但 Verified=true → 返回 false（已验证过的不算）
-	s5 := NewState("test", 10, 4)
-	s5.AnalysisResult = &AnalysisResult{
-		Recommendations: []Recommendation{
-			{Priority: "high", Action: "test", Executable: false, Verified: false},
-			{Priority: "high", Action: "already verified", Executable: true, Verified: true},
-		},
-	}
-	if s5.HasExecutableRecommendations() {
-		t.Error("expected HasExecutableRecommendations to return false when all executable recommendations are already verified")
-	}
-
-	// 场景6: 混合情况 - 部分已验证，部分未验证 → 返回 true
-	s6 := NewState("test", 10, 4)
-	s6.AnalysisResult = &AnalysisResult{
-		Recommendations: []Recommendation{
-			{Priority: "high", Action: "already verified", Executable: true, Verified: true},
-			{Priority: "high", Action: "not verified yet", Executable: true, Verified: false},
-		},
-	}
-	if !s6.HasExecutableRecommendations() {
-		t.Error("expected HasExecutableRecommendations to return true when there are some unverified executable recommendations")
 	}
 }

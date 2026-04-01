@@ -67,14 +67,13 @@ type RedisConfig struct {
 
 // AgentConfig Agent 行为配置
 type AgentConfig struct {
-	MaxIterations          int  `yaml:"max_iterations"`           // 默认 10
-	CompressThreshold      int  `yaml:"compress_threshold"`       // 默认 4
-	OutputMaxLines         int  `yaml:"output_max_lines"`         // 默认 50
-	OutputMaxChars         int  `yaml:"output_max_chars"`         // 默认 3000
-	FindingTTLHours        int  `yaml:"finding_ttl_hours"`        // 默认 1
-	VerifyRecommendations  bool `yaml:"verify_recommendations"`   // 是否自动执行可验证建议，默认 true
-	MaxVerifyCommands      int  `yaml:"max_verify_commands"`      // 每次最多验证几条建议命令，默认 3
-	VerifyFullRegeneration bool `yaml:"verify_full_regeneration"` // 有新信息时是否完整重新生成终版报告，默认 true
+	MaxIterations         int  `yaml:"max_iterations"`          // 默认 10
+	CompressThreshold     int  `yaml:"compress_threshold"`      // 默认 4
+	OutputMaxLines        int  `yaml:"output_max_lines"`        // 默认 50
+	OutputMaxChars        int  `yaml:"output_max_chars"`        // 默认 3000
+	FindingTTLHours       int  `yaml:"finding_ttl_hours"`       // 默认 1
+	VerifyRecommendations bool `yaml:"verify_recommendations"`  // 是否启用验证迭代，默认 true
+	MaxVerifyIterations   int  `yaml:"max_verify_iterations"`   // 验证阶段最大迭代数，默认 2
 }
 
 // LogConfig 日志配置
@@ -189,10 +188,9 @@ func (c *Config) setDefaults() {
 	// 注意：bool 类型零值为 false，但我们需要默认启用，所以这里不需要判断，直接保持配置值即可
 	// 如果配置文件中未设置，Go 会解析为 false，但我们需要默认 true
 	// 因此这里不做特殊处理，由调用方判断 if cfg.Agent.VerifyRecommendations
-	if c.Agent.MaxVerifyCommands == 0 {
-		c.Agent.MaxVerifyCommands = 3
+	if c.Agent.MaxVerifyIterations == 0 {
+		c.Agent.MaxVerifyIterations = 2
 	}
-	// VerifyFullRegeneration 默认为 true（同上，bool 零值为 false）
 }
 
 // validate 校验必填字段
@@ -215,7 +213,7 @@ func (c *Config) validate() error {
 // String 返回配置的字符串表示（用于调试，隐藏敏感信息）
 func (c *Config) String() string {
 	return fmt.Sprintf(
-		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyCommands:%d VerifyFullRegeneration:%t}, Log:{Level:%s FilePath:%s}}",
+		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyIterations:%d}, Log:{Level:%s FilePath:%s}}",
 		c.Gateway.BaseURL,
 		c.Gateway.TimeoutSeconds,
 		c.ShellMCP.ServerURL,
@@ -231,8 +229,7 @@ func (c *Config) String() string {
 		c.Agent.OutputMaxChars,
 		c.Agent.FindingTTLHours,
 		c.Agent.VerifyRecommendations,
-		c.Agent.MaxVerifyCommands,
-		c.Agent.VerifyFullRegeneration,
+		c.Agent.MaxVerifyIterations,
 		c.Log.Level,
 		c.Log.FilePath,
 	)
