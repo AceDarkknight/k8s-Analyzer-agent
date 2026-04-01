@@ -67,13 +67,13 @@ type RedisConfig struct {
 
 // AgentConfig Agent 行为配置
 type AgentConfig struct {
-	MaxIterations         int  `yaml:"max_iterations"`          // 默认 10
-	CompressThreshold     int  `yaml:"compress_threshold"`      // 默认 4
-	OutputMaxLines        int  `yaml:"output_max_lines"`        // 默认 50
-	OutputMaxChars        int  `yaml:"output_max_chars"`        // 默认 3000
-	FindingTTLHours       int  `yaml:"finding_ttl_hours"`       // 默认 1
-	VerifyRecommendations bool `yaml:"verify_recommendations"`  // 是否启用验证迭代，默认 true
-	MaxVerifyIterations   int  `yaml:"max_verify_iterations"`   // 验证阶段最大迭代数，默认 2
+	MaxIterations         int  `yaml:"max_iterations"`         // 默认 10
+	CompressThreshold     int  `yaml:"compress_threshold"`     // 默认 4
+	OutputMaxLines        int  `yaml:"output_max_lines"`       // 默认 50
+	OutputMaxChars        int  `yaml:"output_max_chars"`       // 默认 3000
+	FindingTTLHours       int  `yaml:"finding_ttl_hours"`      // 默认 1
+	VerifyRecommendations bool `yaml:"verify_recommendations"` // 是否启用验证迭代，默认 true
+	MaxVerifyIterations   int  `yaml:"max_verify_iterations"`  // 验证阶段最大迭代数，默认 2
 }
 
 // LogConfig 日志配置
