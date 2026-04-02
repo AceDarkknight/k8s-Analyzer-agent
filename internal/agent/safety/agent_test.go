@@ -29,6 +29,15 @@ func (m *mockCommandExecutor) ExecuteCommand(ctx context.Context, command string
 	return m.result, m.err
 }
 
+// mockExecuteResult 创建模拟的执行结果
+func mockExecuteResult(stdout string, isError bool) *shellmcp.ExecuteResult {
+	return &shellmcp.ExecuteResult{
+		Summary: "mock execution",
+		Output:  stdout,
+		IsError: isError,
+	}
+}
+
 // TestExecuteSafeCommand_Whitelist_Allow 测试白名单命令直接执行
 func TestExecuteSafeCommand_Whitelist_Allow(t *testing.T) {
 	// 创建规则引擎：kubectl get 在白名单中
@@ -42,17 +51,7 @@ func TestExecuteSafeCommand_Whitelist_Allow(t *testing.T) {
 
 	// 创建 mock 执行器
 	mockExec := &mockCommandExecutor{
-		result: &shellmcp.ExecuteResult{
-			Results: []shellmcp.NodeResult{
-				{
-					NodeID:   "node-1",
-					Stdout:   "pod-1 Running",
-					Stderr:   "",
-					ExitCode: 0,
-					Success:  true,
-				},
-			},
-		},
+		result: mockExecuteResult("pod-1 Running", false),
 	}
 
 	// auditor 为 nil，但白名单命令不需要 LLM
@@ -154,17 +153,7 @@ func TestExecuteSafeCommand_Unknown_LLM_Safe(t *testing.T) {
 
 	// 创建 mock 执行器
 	mockExec := &mockCommandExecutor{
-		result: &shellmcp.ExecuteResult{
-			Results: []shellmcp.NodeResult{
-				{
-					NodeID:   "node-1",
-					Stdout:   "output",
-					Stderr:   "",
-					ExitCode: 0,
-					Success:  true,
-				},
-			},
-		},
+		result: mockExecuteResult("output", false),
 	}
 
 	agent := NewSafetyAgent(rules, mockAuditor, mockExec)
@@ -216,17 +205,7 @@ func TestExecuteSafeCommand_Unknown_LLM_Warning(t *testing.T) {
 
 	// 创建 mock 执行器
 	mockExec := &mockCommandExecutor{
-		result: &shellmcp.ExecuteResult{
-			Results: []shellmcp.NodeResult{
-				{
-					NodeID:   "node-1",
-					Stdout:   "output",
-					Stderr:   "",
-					ExitCode: 0,
-					Success:  true,
-				},
-			},
-		},
+		result: mockExecuteResult("output", false),
 	}
 
 	agent := NewSafetyAgent(rules, mockAuditor, mockExec)
@@ -433,17 +412,7 @@ func TestExecuteSimple_Allowed(t *testing.T) {
 
 	// 创建 mock 执行器
 	mockExec := &mockCommandExecutor{
-		result: &shellmcp.ExecuteResult{
-			Results: []shellmcp.NodeResult{
-				{
-					NodeID:   "node-1",
-					Stdout:   "pod-1 Running\npod-2 Running",
-					Stderr:   "",
-					ExitCode: 0,
-					Success:  true,
-				},
-			},
-		},
+		result: mockExecuteResult("pod-1 Running\npod-2 Running", false),
 	}
 
 	agent := NewSafetyAgent(rules, nil, mockExec)
@@ -562,26 +531,9 @@ func TestExecuteSafeCommand_MultipleNodes(t *testing.T) {
 		t.Fatalf("failed to create rule engine: %v", err)
 	}
 
-	// 创建 mock 执行器，返回多节点结果
+	// 创建 mock 执行器
 	mockExec := &mockCommandExecutor{
-		result: &shellmcp.ExecuteResult{
-			Results: []shellmcp.NodeResult{
-				{
-					NodeID:   "node-1",
-					Stdout:   "output from node-1",
-					Stderr:   "",
-					ExitCode: 0,
-					Success:  true,
-				},
-				{
-					NodeID:   "node-2",
-					Stdout:   "output from node-2",
-					Stderr:   "warning on node-2",
-					ExitCode: 1,
-					Success:  false,
-				},
-			},
-		},
+		result: mockExecuteResult("output from node-1\noutput from node-2", false),
 	}
 
 	agent := NewSafetyAgent(rules, nil, mockExec)
@@ -596,35 +548,16 @@ func TestExecuteSafeCommand_MultipleNodes(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 验证结果包含两个节点的输出
-	if !strings.Contains(result.Stdout, "[node-1]") {
-		t.Errorf("expected stdout to contain '[node-1]', got '%s'", result.Stdout)
-	}
+	// 验证结果包含输出
 	if !strings.Contains(result.Stdout, "output from node-1") {
 		t.Errorf("expected stdout to contain 'output from node-1', got '%s'", result.Stdout)
-	}
-	if !strings.Contains(result.Stdout, "[node-2]") {
-		t.Errorf("expected stdout to contain '[node-2]', got '%s'", result.Stdout)
 	}
 	if !strings.Contains(result.Stdout, "output from node-2") {
 		t.Errorf("expected stdout to contain 'output from node-2', got '%s'", result.Stdout)
 	}
 
-	// 验证 stderr
-	if !strings.Contains(result.Stderr, "[node-2]") {
-		t.Errorf("expected stderr to contain '[node-2]', got '%s'", result.Stderr)
-	}
-	if !strings.Contains(result.Stderr, "warning on node-2") {
-		t.Errorf("expected stderr to contain 'warning on node-2', got '%s'", result.Stderr)
-	}
-
-	// 验证 ExitCode 取最大值
-	if result.ExitCode != 1 {
-		t.Errorf("expected exit code 1, got %d", result.ExitCode)
-	}
-
-	// 验证 NodeResults 被正确保存
-	if len(result.NodeResults) != 2 {
-		t.Errorf("expected 2 node results, got %d", len(result.NodeResults))
+	// 验证 ExitCode
+	if result.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %d", result.ExitCode)
 	}
 }

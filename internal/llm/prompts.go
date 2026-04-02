@@ -19,7 +19,9 @@ const verifyPhaseHeader = `
 const defaultToolsList = `- list_pods: 列出 Pod 列表。参数: namespace, labelSelector
 - describe_pod: 查看 Pod 详情。参数: namespace, name
 - get_pod_logs: 获取 Pod 日志。参数: namespace, name, container, tailLines
-- list_events: 列出 Events。参数: namespace
+- list_events: 列出命名空间内所有 Events。参数: namespace
+- get_pod_events: 专门获取某个 Pod 的 Events（重要：用于获取 FailedScheduling 完整原因）。参数: namespace, podName
+- list_pvc: 检查 PVC 绑定状态。参数: namespace
 - list_deployments: 列出 Deployments。参数: namespace
 - list_services: 列出 Services。参数: namespace
 - get_nodes: 查看节点状态。无参数
@@ -56,6 +58,11 @@ const decisionPromptTemplate = `你是一个 Kubernetes 集群诊断专家。你
 3. **本轮执行**：说明本轮要执行计划中的哪些步骤
 
 注意：如果之前有命令被安全审计拒绝，必须参考拒绝建议调整命令。
+
+## 关键诊断约束（必须遵守）
+- **Pending Pod 必须找到具体原因**：如果有 Pod 处于 Pending 状态，必须通过 describe_pod 获取 Events 中的 FailedScheduling 具体原因（如节点资源不足、亲和性不匹配、PVC 未绑定等）
+- **CrashLoopBackOff 必须获取日志**：通过 get_pod_logs 找到崩溃的具体错误信息
+- **不能仅凭 Pod 状态下结论**：必须有具体的错误/日志/事件证据
 
 ## 输出格式（严格 JSON，不要包含其他内容）
 {
@@ -235,9 +242,14 @@ const reactSystemPromptTemplate = `你是一个资深的 Kubernetes 集群故障
 ## 诊断思路引导
 
 ### Pod 异常排查
-- CrashLoopBackOff → 查看 Pod 日志（get_pod_logs） → 分析错误信息
+- CrashLoopBackOff → 查看 Pod 日志（get_pod_logs）→ 分析错误信息
 - ImagePullBackOff → 检查镜像名称/仓库访问 → describe_pod 查看 Events
-- Pending → describe_pod 查看调度条件 → get_nodes 查看节点资源
+- **Pending → 重要！必须使用 get_pod_events 获取该 Pod 的专属事件，找到 FailedScheduling 的具体原因**：
+  - 节点资源不足 (Insufficient cpu/memory)
+  - 亲和性/节点选择器不匹配 (node(s) didn't match)
+  - 污点/容忍不匹配 (node(s) had taint)
+  - PVC 未绑定 (unbound PersistentVolumeClaim)
+  - 端口冲突/资源配额限制
 - OOMKilled → 查看容器内存限制 → 分析内存使用（execute_safe_command: free -m）
 - Evicted → 查看节点状态 → 检查磁盘空间（execute_safe_command: df -h）
 

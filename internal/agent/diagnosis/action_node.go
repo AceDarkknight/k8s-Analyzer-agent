@@ -31,10 +31,12 @@ var toolMapping = map[string]struct {
 	"describe_pod":     {"describe", "pod"},
 	"get_pod_logs":     {"logs", ""},
 	"list_events":      {"get", "events"},
+	"get_pod_events":   {"get", "events"},  // 专门获取某个 Pod 的事件
 	"list_deployments": {"get", "deployments"},
 	"list_services":    {"get", "services"},
 	"get_nodes":        {"get", "nodes"},
 	"list_namespaces":  {"get", "namespaces"},
+	"list_pvc":         {"get", "pvc"},       // 检查 PVC 绑定状态
 }
 
 // NewActionNode 创建新的执行节点
@@ -125,10 +127,15 @@ func (n *ActionNode) executeContinue(ctx context.Context, s *state.State, decisi
 
 // executePlan 执行计划模式
 func (n *ActionNode) executePlan(ctx context.Context, s *state.State, decision *DecisionOutput) (*state.State, error) {
-	// 从 Plan 中提取所有工具调用
+	// 优先使用直接传入的 ToolCalls（Graph 执行单步时）
+	// 否则从完整 Plan 中提取
 	var allToolCalls []state.ToolCall
-	for _, step := range decision.Plan {
-		allToolCalls = append(allToolCalls, step.ToolCalls...)
+	if len(decision.ToolCalls) > 0 {
+		allToolCalls = decision.ToolCalls
+	} else {
+		for _, step := range decision.Plan {
+			allToolCalls = append(allToolCalls, step.ToolCalls...)
+		}
 	}
 
 	if len(allToolCalls) == 0 {
@@ -218,11 +225,21 @@ func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc sta
 	if labelSelector, ok := tc.Args["labelSelector"].(string); ok && labelSelector != "" {
 		req.Options.LabelSelector = labelSelector
 	}
+	if fieldSelector, ok := tc.Args["fieldSelector"].(string); ok && fieldSelector != "" {
+		req.Options.FieldSelector = fieldSelector
+	}
 	if container, ok := tc.Args["container"].(string); ok && container != "" {
 		req.Options.Container = container
 	}
 	if tailLines, ok := tc.Args["tailLines"].(float64); ok && tailLines > 0 {
 		req.Options.TailLines = int(tailLines)
+	}
+
+	// 特殊处理：get_pod_events 自动构建 fieldSelector
+	if tc.Name == "get_pod_events" {
+		if podName, ok := tc.Args["podName"].(string); ok && podName != "" {
+			req.Options.FieldSelector = fmt.Sprintf("involvedObject.name=%s", podName)
+		}
 	}
 
 	// 调用 Gateway

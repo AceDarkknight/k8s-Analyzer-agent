@@ -159,10 +159,43 @@ func (n *DecisionNode) fallbackDecision(s *state.State) *DecisionOutput {
 			// 选择第一个异常 Pod 进行完整诊断
 			pod := abnormalPods[0]
 			logger.Info("DecisionNode: fallback to full diagnosis chain",
-				logger.String("pod", fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)))
+				logger.String("pod", fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)),
+				logger.String("status", pod.Status))
 
+			// 根据 Pod 状态选择不同的诊断链
+			if pod.Status == "Pending" {
+				// Pending Pod 专用诊断链：describe + 专门获取 Pod Events + 检查 PVC
+				return &DecisionOutput{
+					Decision: "execute_plan",
+					Thought:  "Pending Pod 需要深入分析调度失败原因：1) describe 获取基本信息 2) 专门获取该 Pod 的 Events 找到 FailedScheduling 具体原因 3) 检查 PVC 绑定状态",
+					ToolCalls: []state.ToolCall{
+						{
+							Name: "describe_pod",
+							Args: map[string]interface{}{
+								"namespace": pod.Namespace,
+								"name":      pod.Name,
+							},
+						},
+						{
+							Name: "get_pod_events",
+							Args: map[string]interface{}{
+								"namespace": pod.Namespace,
+								"podName":   pod.Name,
+							},
+						},
+						{
+							Name: "list_pvc",
+							Args: map[string]interface{}{
+								"namespace": pod.Namespace,
+							},
+						},
+					},
+				}
+			}
+
+			// 其他异常 Pod（CrashLoopBackOff等）使用标准诊断链
 			return &DecisionOutput{
-				Decision: "continue",
+				Decision: "execute_plan",
 				Thought:  "发现异常 Pod，执行完整诊断链：describe + logs + events",
 				ToolCalls: []state.ToolCall{
 					{
@@ -181,9 +214,10 @@ func (n *DecisionNode) fallbackDecision(s *state.State) *DecisionOutput {
 						},
 					},
 					{
-						Name: "list_events",
+						Name: "get_pod_events",
 						Args: map[string]interface{}{
 							"namespace": pod.Namespace,
+							"podName":   pod.Name,
 						},
 					},
 				},

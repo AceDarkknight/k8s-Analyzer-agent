@@ -34,13 +34,36 @@ func NewOutputSummarizer(maxLines, maxChars int) *OutputSummarizer {
 
 // priorityKeywords 定义优先行的关键词（不区分大小写）
 var priorityKeywords = []string{
+	// 错误类
 	"ERROR",
 	"WARN",
 	"FATAL",
 	"panic",
+	// Pod 状态异常
 	"OOMKilled",
 	"CrashLoopBackOff",
 	"ImagePullBackOff",
+	"ErrImagePull",
+	"CreateContainerError",
+	// 调度相关（Pending Pod 关键信息）
+	"FailedScheduling",
+	"Unschedulable",
+	"Insufficient",
+	"node(s) didn't match",
+	"node(s) had taint",
+	"PodToleratesNodeTaints",
+	"NodeAffinity",
+	"NodeSelector",
+	// 存储相关
+	"FailedMount",
+	"FailedAttachVolume",
+	"VolumeBinding",
+	"PersistentVolumeClaim",
+	// 其他关键信息
+	"BackOff",
+	"Failed",
+	"Evicted",
+	"Pending",
 }
 
 // isPriorityLine 判断是否为优先行
