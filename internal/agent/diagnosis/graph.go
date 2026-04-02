@@ -74,18 +74,32 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 
 		// a. 检查是否有未执行完的计划
 		if len(currentPlan) > 0 && nextStepIndex < len(currentPlan) {
-			// 直接执行计划中的下一步，无需调用 LLM
-			step := currentPlan[nextStepIndex]
-			decisionOutput = &DecisionOutput{
-				Decision:  "execute_plan",
-				Thought:   fmt.Sprintf("执行计划步骤 %d: %s", step.Step, step.Description),
-				ToolCalls: step.ToolCalls,
+			// 跳过空工具调用的步骤
+			for nextStepIndex < len(currentPlan) && len(currentPlan[nextStepIndex].ToolCalls) == 0 {
+				logger.Info("Graph: skipping step with no tool calls",
+					logger.Int("step", currentPlan[nextStepIndex].Step))
+				nextStepIndex++
 			}
-			nextStepIndex++
-			logger.Info("Graph: executing planned step",
-				logger.Int("step", step.Step),
-				logger.String("description", step.Description),
-				logger.Int("remaining", len(currentPlan)-nextStepIndex))
+
+			// 如果还有步骤可执行
+			if nextStepIndex < len(currentPlan) {
+				step := currentPlan[nextStepIndex]
+				decisionOutput = &DecisionOutput{
+					Decision:  "execute_plan",
+					Thought:   fmt.Sprintf("执行计划步骤 %d: %s", step.Step, step.Description),
+					ToolCalls: step.ToolCalls,
+				}
+				nextStepIndex++
+				logger.Info("Graph: executing planned step",
+					logger.Int("step", step.Step),
+					logger.String("description", step.Description),
+					logger.Int("remaining", len(currentPlan)-nextStepIndex))
+			} else {
+				// 计划已全部执行完，重新调用 LLM
+				currentPlan = nil
+				nextStepIndex = 0
+				continue
+			}
 		} else {
 			// 没有计划或计划已执行完，调用 DecisionNode
 			logger.Info("Graph: executing DecisionNode")

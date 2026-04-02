@@ -150,86 +150,27 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 	}, nil
 }
 
-// fallbackDecision 降级决策处理
+// fallbackDecision 降级决策处理（仅在 LLM 失败时使用）
 func (n *DecisionNode) fallbackDecision(s *state.State) *DecisionOutput {
-	// 如果 K8sInfo 有异常 Pod 且 IterationCount < 3，返回 continue + 完整诊断工具链
-	if s.K8sInfo != nil && s.GetIterationCount() < 3 {
+	// 简单保底：如果还有迭代次数且有异常 Pod，让 LLM 重试
+	if s.K8sInfo != nil && s.GetIterationCount() < s.GetMaxIterations()-1 {
 		abnormalPods := s.K8sInfo.GetAbnormalPods()
 		if len(abnormalPods) > 0 {
-			// 选择第一个异常 Pod 进行完整诊断
-			pod := abnormalPods[0]
-			logger.Info("DecisionNode: fallback to full diagnosis chain",
-				logger.String("pod", fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)),
-				logger.String("status", pod.Status))
-
-			// 根据 Pod 状态选择不同的诊断链
-			if pod.Status == "Pending" {
-				// Pending Pod 专用诊断链：describe + 专门获取 Pod Events + 检查 PVC
-				return &DecisionOutput{
-					Decision: "execute_plan",
-					Thought:  "Pending Pod 需要深入分析调度失败原因：1) describe 获取基本信息 2) 专门获取该 Pod 的 Events 找到 FailedScheduling 具体原因 3) 检查 PVC 绑定状态",
-					ToolCalls: []state.ToolCall{
-						{
-							Name: "describe_pod",
-							Args: map[string]interface{}{
-								"namespace": pod.Namespace,
-								"name":      pod.Name,
-							},
-						},
-						{
-							Name: "get_pod_events",
-							Args: map[string]interface{}{
-								"namespace": pod.Namespace,
-								"podName":   pod.Name,
-							},
-						},
-						{
-							Name: "list_pvc",
-							Args: map[string]interface{}{
-								"namespace": pod.Namespace,
-							},
-						},
-					},
-				}
-			}
-
-			// 其他异常 Pod（CrashLoopBackOff等）使用标准诊断链
+			logger.Info("DecisionNode: fallback - abnormal pods exist, will retry LLM")
+			// 返回空的 execute_plan，让下一轮重新调用 LLM
 			return &DecisionOutput{
-				Decision: "execute_plan",
-				Thought:  "发现异常 Pod，执行完整诊断链：describe + logs + events",
-				ToolCalls: []state.ToolCall{
-					{
-						Name: "describe_pod",
-						Args: map[string]interface{}{
-							"namespace": pod.Namespace,
-							"name":      pod.Name,
-						},
-					},
-					{
-						Name: "get_pod_logs",
-						Args: map[string]interface{}{
-							"namespace": pod.Namespace,
-							"name":      pod.Name,
-							"tailLines": 100,
-						},
-					},
-					{
-						Name: "get_pod_events",
-						Args: map[string]interface{}{
-							"namespace": pod.Namespace,
-							"podName":   pod.Name,
-						},
-					},
-				},
+				Decision:  "execute_plan",
+				Thought:   "LLM 调用失败，等待下一轮重试",
+				ToolCalls: []state.ToolCall{},
 			}
 		}
 	}
 
-	// 否则返回 report
+	// 否则直接生成报告
 	logger.Info("DecisionNode: fallback to report")
 	return &DecisionOutput{
 		Decision:  "report",
-		Thought:   "基于已有信息生成报告",
+		Thought:   "LLM 调用失败，基于已有信息生成报告",
 		ToolCalls: []state.ToolCall{},
 	}
 }

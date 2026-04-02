@@ -16,25 +16,34 @@ const verifyPhaseHeader = `
 `
 
 // 可用工具列表
-const defaultToolsList = `- list_pods: 列出 Pod 列表。参数: namespace, labelSelector
+const defaultToolsList = `### 基础查询
+- list_pods: 列出 Pod 列表。参数: namespace, labelSelector
 - describe_pod: 查看 Pod 详情。参数: namespace, name
 - get_pod_logs: 获取 Pod 日志。参数: namespace, name, container, tailLines
-- list_events: 列出命名空间内所有 Events。参数: namespace
-- get_pod_events: 专门获取某个 Pod 的 Events（重要：用于获取 FailedScheduling 完整原因）。参数: namespace, podName
+- get_nodes: 查看节点状态。无参数
+
+### 事件查询（重要）
+- get_pod_events: 获取指定 Pod 的事件。参数: namespace, podName
+  → 用于 Pending Pod 找 FailedScheduling 原因
+  → 用于 CrashLoopBackOff 找 BackOff 事件
+- list_events: 列出命名空间所有事件。参数: namespace
+
+### 资源查询
 - list_pvc: 检查 PVC 绑定状态。参数: namespace
 - list_deployments: 列出 Deployments。参数: namespace
 - list_services: 列出 Services。参数: namespace
-- get_nodes: 查看节点状态。无参数
 - list_namespaces: 列出命名空间。无参数
-- execute_safe_command: 在集群节点上执行 Shell 命令（需通过安全审计）。参数: command, reason`
+
+### 系统命令
+- execute_safe_command: 在节点执行 Shell 命令（需安全审计）。参数: command, reason`
 
 // DecisionPrompt 模板
-const decisionPromptTemplate = `你是一个 Kubernetes 集群诊断专家。你的任务是分析集群状态，制定完整诊断计划。
+const decisionPromptTemplate = `你是 Kubernetes 集群诊断专家。你的职责是自主分析问题并选择合适的工具进行调查。
 
 ## 用户查询
 {user_query}
 
-## 当前集群状态
+## 集群状态
 {resource_summary}
 
 ### 异常资源
@@ -42,49 +51,43 @@ const decisionPromptTemplate = `你是一个 Kubernetes 集群诊断专家。你
 
 {compressed_summary_block}
 
-## 最近推理步骤
+## 已执行的步骤
 {recent_steps}
 
-## 当前进度
-第 {iteration}/{max_iterations} 轮迭代。
+## 进度
+第 {iteration}/{max_iterations} 轮
 
 ## 可用工具
 {tools_list}
 
-## Thought 格式要求
-你的 thought 必须包含以下三部分：
-1. **当前认知**：基于已有信息，目前了解到什么？有哪些异常？
-2. **完整诊断计划**：针对每个异常资源，列出需要执行的所有诊断步骤（describe、logs、events等）
-3. **本轮执行**：说明本轮要执行计划中的哪些步骤
+## 诊断思路（根据 Pod 状态选择工具）
 
-注意：如果之前有命令被安全审计拒绝，必须参考拒绝建议调整命令。
+| Pod 状态 | 必须执行的工具 | 目标 |
+|---------|--------------|------|
+| Pending | get_pod_events + list_pvc | 找到 FailedScheduling 具体原因 |
+| CrashLoopBackOff | get_pod_logs + get_pod_events | 找到崩溃错误信息 |
+| ImagePullBackOff | describe_pod | 找到镜像拉取失败原因 |
+| OOMKilled | describe_pod + get_pod_logs | 找到内存耗尽原因 |
 
-## 关键诊断约束（必须遵守）
-- **Pending Pod 必须找到具体原因**：如果有 Pod 处于 Pending 状态，必须通过 describe_pod 获取 Events 中的 FailedScheduling 具体原因（如节点资源不足、亲和性不匹配、PVC 未绑定等）
-- **CrashLoopBackOff 必须获取日志**：通过 get_pod_logs 找到崩溃的具体错误信息
-- **不能仅凭 Pod 状态下结论**：必须有具体的错误/日志/事件证据
-
-## 输出格式（严格 JSON，不要包含其他内容）
+## 输出格式（严格 JSON）
 {
-  "thought": "你的完整推理过程",
-  "decision": "execute_plan 或 deep_query 或 report",
+  "thought": "分析当前状态，说明选择哪些工具以及为什么",
+  "decision": "execute_plan | deep_query | report",
   "plan": [
-    {
-      "step": 1,
-      "description": "步骤描述",
-      "tool_calls": [{"name": "工具名", "args": {}}]
-    }
+    {"step": 1, "description": "步骤描述", "tool_calls": [{"name": "工具名", "args": {}}]}
   ],
   "execute_steps": [1, 2],
-  "deep_query_topic": "仅当 decision=deep_query 时填写"
+  "deep_query_topic": "仅 deep_query 时填写"
 }
 
-决策规则：
-- 如果能制定完整诊断计划 → decision = "execute_plan"，填写 plan 和 execute_steps
-- 如果需要多步关联调查，无法预先确定步骤 → decision = "deep_query"
-- 如果已收集到足够信息可以给出诊断 → decision = "report"，plan 为空数组
-- 如果已达到第 {max_iterations} 轮 → 必须 decision = "report"
-- 每轮 execute_steps 最多包含 3 个步骤，但 plan 可以包含完整计划`
+## 决策规则
+- **execute_plan**：有明确的诊断目标，选择工具执行
+- **report**：已找到问题根因（有具体证据），或达到最大迭代次数
+- **deep_query**：需要多步关联调查
+
+## 注意
+- 每轮最多 3 个工具调用
+- 必须有具体证据才能下结论，不要仅凭 Pod 状态猜测`
 
 // 验证阶段决策 Prompt 模板
 const verifyDecisionPromptTemplate = `你是一个 Kubernetes 诊断专家，当前处于验证阶段。

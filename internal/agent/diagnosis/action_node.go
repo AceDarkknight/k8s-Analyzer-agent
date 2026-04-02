@@ -31,12 +31,12 @@ var toolMapping = map[string]struct {
 	"describe_pod":     {"describe", "pod"},
 	"get_pod_logs":     {"logs", ""},
 	"list_events":      {"get", "events"},
-	"get_pod_events":   {"get", "events"},  // 专门获取某个 Pod 的事件
+	"get_pod_events":   {"get", "events"}, // 专门获取某个 Pod 的事件
 	"list_deployments": {"get", "deployments"},
 	"list_services":    {"get", "services"},
 	"get_nodes":        {"get", "nodes"},
 	"list_namespaces":  {"get", "namespaces"},
-	"list_pvc":         {"get", "pvc"},       // 检查 PVC 绑定状态
+	"list_pvc":         {"get", "pvc"}, // 检查 PVC 绑定状态
 }
 
 // NewActionNode 创建新的执行节点
