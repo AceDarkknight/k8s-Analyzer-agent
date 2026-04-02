@@ -12,9 +12,11 @@ import (
 // DecisionResult 决策节点 LLM 响应
 type DecisionResult struct {
 	Thought        string           `json:"thought"`
-	Decision       string           `json:"decision"` // continue / deep_query / report
-	ToolCalls      []state.ToolCall `json:"tool_calls"`
-	DeepQueryTopic string           `json:"deep_query_topic"` // deep_query 时的调查主题
+	Decision       string           `json:"decision"` // execute_plan / deep_query / report
+	ToolCalls      []state.ToolCall `json:"tool_calls"` // 兼容旧模式
+	Plan           []state.PlanStep `json:"plan"`       // 新模式
+	ExecuteSteps   []int            `json:"execute_steps"`
+	DeepQueryTopic string           `json:"deep_query_topic"`
 }
 
 // AuditResponse LLM 审计响应
@@ -67,15 +69,25 @@ func ParseDecisionResponse(content string) (*DecisionResult, error) {
 		return parseDecisionResponseFallback(content)
 	}
 
-	// 验证 decision 值
+	// 验证 decision 值（支持新旧两种模式）
 	validDecisions := map[string]bool{
-		"continue":   true,
-		"deep_query": true,
-		"report":     true,
+		"continue":     true, // 旧模式兼容
+		"execute_plan": true, // 新模式
+		"deep_query":   true,
+		"report":       true,
 	}
 	if !validDecisions[result.Decision] {
 		// 尝试降级处理
 		return parseDecisionResponseFallback(content)
+	}
+
+	// 旧模式兼容：如果是 continue，转换为 execute_plan 格式
+	if result.Decision == "continue" && len(result.ToolCalls) > 0 {
+		result.Decision = "execute_plan"
+		result.Plan = []state.PlanStep{
+			{Step: 1, Description: "诊断步骤", ToolCalls: result.ToolCalls},
+		}
+		result.ExecuteSteps = []int{1}
 	}
 
 	return &result, nil

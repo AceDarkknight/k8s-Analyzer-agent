@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
@@ -90,24 +91,65 @@ func (n *InfoNode) Execute(ctx context.Context, s *state.State) (*state.State, e
 		Resources:  make(map[string][]interface{}),
 	}
 
-	// 5. 遍历命名空间收集 Pod 和 Deployment 信息
-	for _, ns := range targetNamespaces {
-		// 获取 Pod 列表
-		if err := n.collectPods(ctx, k8sInfo, ns); err != nil {
-			logger.Warn("InfoNode: failed to collect pods",
-				logger.String("namespace", ns),
-				logger.Err(err))
-		}
+	// 5. 并发收集各命名空间的 Pods、Deployments 和 Services
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 
-		// 获取 Deployment 列表
-		if err := n.collectDeployments(ctx, k8sInfo, ns); err != nil {
-			logger.Warn("InfoNode: failed to collect deployments",
-				logger.String("namespace", ns),
-				logger.Err(err))
-		}
+	for _, ns := range targetNamespaces {
+		wg.Add(1)
+		go func(namespace string) {
+			defer wg.Done()
+
+			// 获取 Pod 列表
+			if pods, err := n.collectPods(ctx, namespace); err != nil {
+				logger.Warn("InfoNode: failed to collect pods",
+					logger.String("namespace", namespace),
+					logger.Err(err))
+			} else {
+				mu.Lock()
+				k8sInfo.Resources["Pods"] = append(k8sInfo.Resources["Pods"], pods...)
+				mu.Unlock()
+			}
+
+			// 获取 Deployment 列表
+			if deployments, err := n.collectDeployments(ctx, namespace); err != nil {
+				logger.Warn("InfoNode: failed to collect deployments",
+					logger.String("namespace", namespace),
+					logger.Err(err))
+			} else {
+				mu.Lock()
+				k8sInfo.Resources["Deployments"] = append(k8sInfo.Resources["Deployments"], deployments...)
+				mu.Unlock()
+			}
+
+			// 获取 Services 列表
+			if services, err := n.collectServices(ctx, namespace); err != nil {
+				logger.Warn("InfoNode: failed to collect services",
+					logger.String("namespace", namespace),
+					logger.Err(err))
+			} else {
+				mu.Lock()
+				k8sInfo.Resources["Services"] = append(k8sInfo.Resources["Services"], services...)
+				mu.Unlock()
+			}
+		}(ns)
+	}
+	wg.Wait()
+
+	// 6. 收集节点状态和集群事件（全局资源）
+	if nodes, err := n.collectNodes(ctx); err != nil {
+		logger.Warn("InfoNode: failed to collect nodes", logger.Err(err))
+	} else {
+		k8sInfo.Resources["Nodes"] = nodes
 	}
 
-	// 6. 更新 state
+	if events, err := n.collectClusterEvents(ctx); err != nil {
+		logger.Warn("InfoNode: failed to collect events", logger.Err(err))
+	} else {
+		k8sInfo.Resources["Events"] = events
+	}
+
+	// 7. 更新 state
 	s.SetK8sInfo(k8sInfo)
 
 	logger.Info("InfoNode: information collection completed",
@@ -119,35 +161,78 @@ func (n *InfoNode) Execute(ctx context.Context, s *state.State) (*state.State, e
 }
 
 // collectPods 收集 Pod 信息
-func (n *InfoNode) collectPods(ctx context.Context, k8sInfo *state.K8sInfo, ns string) error {
+func (n *InfoNode) collectPods(ctx context.Context, ns string) ([]interface{}, error) {
 	resp, err := n.gateway.ListPods(ctx, ns, "")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	pods, err := parsePods(resp.Stdout, ns)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	k8sInfo.Resources["Pods"] = append(k8sInfo.Resources["Pods"], pods...)
-	return nil
+	return pods, nil
 }
 
 // collectDeployments 收集 Deployment 信息
-func (n *InfoNode) collectDeployments(ctx context.Context, k8sInfo *state.K8sInfo, ns string) error {
+func (n *InfoNode) collectDeployments(ctx context.Context, ns string) ([]interface{}, error) {
 	resp, err := n.gateway.ListDeployments(ctx, ns)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	deployments, err := parseDeployments(resp.Stdout)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	k8sInfo.Resources["Deployments"] = append(k8sInfo.Resources["Deployments"], deployments...)
-	return nil
+	return deployments, nil
+}
+
+// collectServices 收集 Service 信息
+func (n *InfoNode) collectServices(ctx context.Context, ns string) ([]interface{}, error) {
+	resp, err := n.gateway.ListServices(ctx, ns)
+	if err != nil {
+		return nil, err
+	}
+
+	services, err := parseServices(resp.Stdout)
+	if err != nil {
+		return nil, err
+	}
+
+	return services, nil
+}
+
+// collectNodes 收集节点信息
+func (n *InfoNode) collectNodes(ctx context.Context) ([]interface{}, error) {
+	resp, err := n.gateway.GetNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	nodes, err := parseNodes(resp.Stdout)
+	if err != nil {
+		return nil, err
+	}
+
+	return nodes, nil
+}
+
+// collectClusterEvents 收集集群事件（Warning 级别）
+func (n *InfoNode) collectClusterEvents(ctx context.Context) ([]interface{}, error) {
+	resp, err := n.gateway.ListEvents(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+
+	events, err := parseEvents(resp.Stdout)
+	if err != nil {
+		return nil, err
+	}
+
+	return events, nil
 }
 
 // extractSpecifiedNamespace 从用户输入中提取指定的命名空间
@@ -387,4 +472,199 @@ func parseDeployments(stdout string) ([]interface{}, error) {
 		deployments = append(deployments, state.DeploymentInfo{Name: name})
 	}
 	return deployments, nil
+}
+
+// parseServices 解析 Service 列表（支持 JSON 和表格格式）
+func parseServices(stdout string) ([]interface{}, error) {
+	stdout = strings.TrimSpace(stdout)
+	if stdout == "" {
+		return []interface{}{}, nil
+	}
+
+	// 尝试 JSON 格式解析
+	var jsonResult struct {
+		Items []struct {
+			Metadata struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+			Spec struct {
+				Type      string `json:"type"`
+				ClusterIP string `json:"clusterIP"`
+				Ports     []struct {
+					Port     int32  `json:"port"`
+					Protocol string `json:"protocol"`
+				} `json:"ports"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &jsonResult); err == nil {
+		services := make([]interface{}, 0, len(jsonResult.Items))
+		for _, item := range jsonResult.Items {
+			var portStrs []string
+			for _, p := range item.Spec.Ports {
+				portStrs = append(portStrs, fmt.Sprintf("%d/%s", p.Port, p.Protocol))
+			}
+			svc := state.ServiceInfo{
+				Name:      item.Metadata.Name,
+				Namespace: item.Metadata.Namespace,
+				Type:      item.Spec.Type,
+				ClusterIP: item.Spec.ClusterIP,
+				Ports:     strings.Join(portStrs, ","),
+			}
+			services = append(services, svc)
+		}
+		return services, nil
+	}
+
+	// JSON 解析失败，尝试表格格式
+	names, err := parseTableFormat(stdout, "NAME")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse services: %w", err)
+	}
+	services := make([]interface{}, 0, len(names))
+	for _, name := range names {
+		services = append(services, state.ServiceInfo{Name: name})
+	}
+	return services, nil
+}
+
+// NodeInfo 节点信息
+type NodeInfo struct {
+	Name   string
+	Status string
+	Roles  string
+	Age    string
+}
+
+// parseNodes 解析节点列表（支持 JSON 和表格格式）
+func parseNodes(stdout string) ([]interface{}, error) {
+	stdout = strings.TrimSpace(stdout)
+	if stdout == "" {
+		return []interface{}{}, nil
+	}
+
+	// 尝试 JSON 格式解析
+	var jsonResult struct {
+		Items []struct {
+			Metadata struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Status struct {
+				Conditions []struct {
+					Type   string `json:"type"`
+					Status string `json:"status"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &jsonResult); err == nil {
+		nodes := make([]interface{}, 0, len(jsonResult.Items))
+		for _, item := range jsonResult.Items {
+			nodeStatus := "Unknown"
+			for _, cond := range item.Status.Conditions {
+				if cond.Type == "Ready" {
+					if cond.Status == "True" {
+						nodeStatus = "Ready"
+					} else {
+						nodeStatus = "NotReady"
+					}
+					break
+				}
+			}
+			// 提取角色标签
+			role := "worker"
+			for k := range item.Metadata.Labels {
+				if strings.HasPrefix(k, "node-role.kubernetes.io/") {
+					role = strings.TrimPrefix(k, "node-role.kubernetes.io/")
+					break
+				}
+			}
+			nodes = append(nodes, NodeInfo{
+				Name:   item.Metadata.Name,
+				Status: nodeStatus,
+				Roles:  role,
+			})
+		}
+		return nodes, nil
+	}
+
+	// JSON 解析失败，尝试表格格式
+	lines := strings.Split(stdout, "\n")
+	var nodes []interface{}
+	headerFound := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "NAME") && strings.Contains(line, "STATUS") && !headerFound {
+			headerFound = true
+			continue
+		}
+		if headerFound {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				nodes = append(nodes, NodeInfo{
+					Name:   fields[0],
+					Status: fields[1],
+				})
+			}
+		}
+	}
+	return nodes, nil
+}
+
+// EventInfo 事件信息
+type EventInfo struct {
+	Namespace string
+	Type      string
+	Reason    string
+	Object    string
+	Message   string
+}
+
+// parseEvents 解析事件列表（只保留 Warning 事件）
+func parseEvents(stdout string) ([]interface{}, error) {
+	stdout = strings.TrimSpace(stdout)
+	if stdout == "" {
+		return []interface{}{}, nil
+	}
+
+	// 尝试 JSON 格式解析
+	var jsonResult struct {
+		Items []struct {
+			Metadata struct {
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+			Type           string `json:"type"`
+			Reason         string `json:"reason"`
+			Message        string `json:"message"`
+			InvolvedObject struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"involvedObject"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &jsonResult); err == nil {
+		events := make([]interface{}, 0)
+		for _, item := range jsonResult.Items {
+			// 只保留 Warning 事件
+			if item.Type != "Warning" {
+				continue
+			}
+			events = append(events, EventInfo{
+				Namespace: item.Metadata.Namespace,
+				Type:      item.Type,
+				Reason:    item.Reason,
+				Object:    fmt.Sprintf("%s/%s", item.InvolvedObject.Kind, item.InvolvedObject.Name),
+				Message:   item.Message,
+			})
+		}
+		return events, nil
+	}
+
+	// JSON 解析失败，返回空列表
+	return []interface{}{}, nil
 }

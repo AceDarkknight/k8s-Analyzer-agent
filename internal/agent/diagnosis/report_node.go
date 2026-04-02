@@ -197,10 +197,41 @@ func matchVerifyResults(s *state.State) {
 					output = output[:200] + "..."
 				}
 				rec.VerifyResult = output
+
+				// 同时更新对应 Finding 的 Evidence
+				updateFindingEvidence(s, rec, output)
 				break
 			}
 		}
 	}
+}
+
+// updateFindingEvidence 根据 Recommendation 更新对应 Finding 的 Evidence
+func updateFindingEvidence(s *state.State, rec *state.Recommendation, verifyOutput string) {
+	for fi := range s.AnalysisResult.Findings {
+		finding := &s.AnalysisResult.Findings[fi]
+		// 如果 Finding 的资源名与 Recommendation 的操作描述相关，则更新 Evidence
+		if isFindingRelatedToRec(finding, rec) {
+			if finding.Evidence == "" {
+				finding.Evidence = "验证输出: " + verifyOutput
+			} else {
+				finding.Evidence += "\n验证输出: " + verifyOutput
+			}
+		}
+	}
+}
+
+// isFindingRelatedToRec 判断 Finding 是否与 Recommendation 相关
+func isFindingRelatedToRec(finding *state.Finding, rec *state.Recommendation) bool {
+	// 提取 Recommendation 中的关键词
+	recKeywords := extractEntityKeywords(rec.Action + " " + rec.Command)
+	// 检查 Finding 的资源名是否包含这些关键词
+	for _, kw := range recKeywords {
+		if len(kw) > 3 && strings.Contains(strings.ToLower(finding.Resource), strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
 }
 
 // commandCoversRecommendation 判断执行命令是否覆盖该建议

@@ -20,7 +20,9 @@ type DecisionNode struct {
 type DecisionOutput struct {
 	Decision       string
 	Thought        string
-	ToolCalls      []state.ToolCall
+	ToolCalls      []state.ToolCall // 兼容旧模式
+	Plan           []state.PlanStep // 新模式：完整计划
+	ExecuteSteps   []int            // 本轮要执行的步骤编号
 	DeepQueryTopic string
 }
 
@@ -98,48 +100,90 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 		return n.fallbackDecision(s), nil
 	}
 
-	// 6. 添加 ReasoningStep 到 state
+	// 6. 构建 ToolCalls（从 execute_steps 中提取）
+	var toolCalls []state.ToolCall
+	if result.Decision == "execute_plan" && len(result.ExecuteSteps) > 0 {
+		for _, stepNum := range result.ExecuteSteps {
+			for _, planStep := range result.Plan {
+				if planStep.Step == stepNum {
+					toolCalls = append(toolCalls, planStep.ToolCalls...)
+					break
+				}
+			}
+		}
+	} else {
+		toolCalls = result.ToolCalls
+	}
+
+	// 7. 添加 ReasoningStep 到 state
 	step := state.ReasoningStep{
 		Iteration:      s.GetIterationCount(),
 		Thought:        result.Thought,
 		Decision:       result.Decision,
 		DeepQueryTopic: result.DeepQueryTopic,
-		ToolCalls:      result.ToolCalls,
+		ToolCalls:      toolCalls,
 	}
 	s.AddReasoningStep(step)
 
 	logger.Info("DecisionNode: decision made",
 		logger.String("decision", result.Decision),
-		logger.Int("tool_calls", len(result.ToolCalls)))
+		logger.Int("tool_calls", len(toolCalls)),
+		logger.Int("plan_steps", len(result.Plan)))
+
+	// 转换 Plan
+	var plan []state.PlanStep
+	for _, ps := range result.Plan {
+		plan = append(plan, state.PlanStep{
+			Step:        ps.Step,
+			Description: ps.Description,
+			ToolCalls:   ps.ToolCalls,
+		})
+	}
 
 	return &DecisionOutput{
 		Decision:       result.Decision,
 		Thought:        result.Thought,
-		ToolCalls:      result.ToolCalls,
+		ToolCalls:      toolCalls,
+		Plan:           plan,
+		ExecuteSteps:   result.ExecuteSteps,
 		DeepQueryTopic: result.DeepQueryTopic,
 	}, nil
 }
 
 // fallbackDecision 降级决策处理
 func (n *DecisionNode) fallbackDecision(s *state.State) *DecisionOutput {
-	// 如果 K8sInfo 有异常 Pod 且 IterationCount < 3，返回 continue + 工具调用 describe_pod
+	// 如果 K8sInfo 有异常 Pod 且 IterationCount < 3，返回 continue + 完整诊断工具链
 	if s.K8sInfo != nil && s.GetIterationCount() < 3 {
 		abnormalPods := s.K8sInfo.GetAbnormalPods()
 		if len(abnormalPods) > 0 {
-			// 选择第一个异常 Pod 进行 describe
+			// 选择第一个异常 Pod 进行完整诊断
 			pod := abnormalPods[0]
-			logger.Info("DecisionNode: fallback to describe abnormal pod",
+			logger.Info("DecisionNode: fallback to full diagnosis chain",
 				logger.String("pod", fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)))
 
 			return &DecisionOutput{
 				Decision: "continue",
-				Thought:  "发现异常 Pod，需要查看详情",
+				Thought:  "发现异常 Pod，执行完整诊断链：describe + logs + events",
 				ToolCalls: []state.ToolCall{
 					{
 						Name: "describe_pod",
 						Args: map[string]interface{}{
 							"namespace": pod.Namespace,
 							"name":      pod.Name,
+						},
+					},
+					{
+						Name: "get_pod_logs",
+						Args: map[string]interface{}{
+							"namespace": pod.Namespace,
+							"name":      pod.Name,
+							"tailLines": 100,
+						},
+					},
+					{
+						Name: "list_events",
+						Args: map[string]interface{}{
+							"namespace": pod.Namespace,
 						},
 					},
 				},

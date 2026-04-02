@@ -11,6 +11,9 @@ import (
 // ToolCall 是 state.ToolCall 的别名，用于本地使用
 type ToolCall = state.ToolCall
 
+// PlanStep 是 state.PlanStep 的别名，用于本地使用
+type PlanStep = state.PlanStep
+
 // Graph 诊断流程编排
 type Graph struct {
 	infoNode            *InfoNode
@@ -57,6 +60,9 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 	logger.Info("Graph: InfoNode completed")
 
 	// 2. 循环执行决策-动作-压缩流程
+	var currentPlan []PlanStep
+	var nextStepIndex int
+
 	for {
 		// 检查是否应该继续
 		if !state.ShouldContinue() {
@@ -64,19 +70,56 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 			break
 		}
 
-		// a. DecisionNode.Execute(ctx, state) → DecisionOutput
-		logger.Info("Graph: executing DecisionNode")
-		decisionOutput, err := g.decisionNode.Execute(ctx, state)
-		if err != nil {
-			logger.Error("Graph: DecisionNode failed", logger.Err(err))
-			// 记录错误但尝试继续（降级处理）
+		var decisionOutput *DecisionOutput
+
+		// a. 检查是否有未执行完的计划
+		if len(currentPlan) > 0 && nextStepIndex < len(currentPlan) {
+			// 直接执行计划中的下一步，无需调用 LLM
+			step := currentPlan[nextStepIndex]
 			decisionOutput = &DecisionOutput{
-				Decision:  "report",
-				Thought:   "决策节点出错，进入报告模式",
-				ToolCalls: []ToolCall{},
+				Decision:  "execute_plan",
+				Thought:   fmt.Sprintf("执行计划步骤 %d: %s", step.Step, step.Description),
+				ToolCalls: step.ToolCalls,
+			}
+			nextStepIndex++
+			logger.Info("Graph: executing planned step",
+				logger.Int("step", step.Step),
+				logger.String("description", step.Description),
+				logger.Int("remaining", len(currentPlan)-nextStepIndex))
+		} else {
+			// 没有计划或计划已执行完，调用 DecisionNode
+			logger.Info("Graph: executing DecisionNode")
+			var err error
+			decisionOutput, err = g.decisionNode.Execute(ctx, state)
+			if err != nil {
+				logger.Error("Graph: DecisionNode failed", logger.Err(err))
+				decisionOutput = &DecisionOutput{
+					Decision:  "report",
+					Thought:   "决策节点出错，进入报告模式",
+					ToolCalls: []ToolCall{},
+				}
+			}
+			logger.Info("Graph: DecisionNode completed", logger.String("decision", decisionOutput.Decision))
+
+			// 如果是 execute_plan 模式，保存计划供后续轮次使用
+			if decisionOutput.Decision == "execute_plan" && len(decisionOutput.Plan) > 0 {
+				currentPlan = decisionOutput.Plan
+				// 找到 execute_steps 中第一个未执行的步骤
+				nextStepIndex = 0
+				for i, step := range currentPlan {
+					for _, execStep := range decisionOutput.ExecuteSteps {
+						if step.Step == execStep {
+							nextStepIndex = i + 1
+							break
+						}
+					}
+				}
+				logger.Info("Graph: plan created",
+					logger.Int("total_steps", len(currentPlan)),
+					logger.Int("executed_now", len(decisionOutput.ExecuteSteps)),
+					logger.Int("remaining", len(currentPlan)-nextStepIndex))
 			}
 		}
-		logger.Info("Graph: DecisionNode completed", logger.String("decision", decisionOutput.Decision))
 
 		// b. 如果 decision == "report" → 跳出循环
 		if decisionOutput.Decision == "report" {
@@ -89,7 +132,6 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 		state, err = g.actionNode.Execute(ctx, state, decisionOutput)
 		if err != nil {
 			logger.Error("Graph: ActionNode failed", logger.Err(err))
-			// 记录错误但继续
 		}
 		logger.Info("Graph: ActionNode completed")
 
@@ -98,7 +140,6 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 		state, err = g.compressNode.Execute(ctx, state)
 		if err != nil {
 			logger.Error("Graph: CompressNode failed", logger.Err(err))
-			// 记录错误但继续
 		}
 		logger.Info("Graph: CompressNode completed")
 
@@ -147,14 +188,16 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 				logger.Error("Graph: ActionNode (verify) failed", logger.Err(err))
 			}
 			logger.Info("Graph: ActionNode (verify) completed")
-
-			// d. CompressNode（可选）
-			logger.Info("Graph: executing CompressNode (verify phase)")
-			state, err = g.compressNode.Execute(ctx, state)
-			if err != nil {
-				logger.Error("Graph: CompressNode (verify) failed", logger.Err(err))
+			
+			// d. CompressNode（验证阶段跳过，因为验证轮数少，无需压缩）
+			if !state.VerifyPhase {
+				logger.Info("Graph: executing CompressNode")
+				state, err = g.compressNode.Execute(ctx, state)
+				if err != nil {
+					logger.Error("Graph: CompressNode failed", logger.Err(err))
+				}
+				logger.Info("Graph: CompressNode completed")
 			}
-			logger.Info("Graph: CompressNode (verify) completed")
 		}
 
 		// 5. 生成终版报告

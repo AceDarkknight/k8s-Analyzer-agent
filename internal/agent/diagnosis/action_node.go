@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
@@ -59,6 +60,9 @@ func (n *ActionNode) Execute(ctx context.Context, s *state.State, decision *Deci
 	switch decision.Decision {
 	case "continue":
 		return n.executeContinue(ctx, s, decision)
+	case "execute_plan":
+		// execute_plan 模式：从 Plan 中提取工具调用执行
+		return n.executePlan(ctx, s, decision)
 	case "deep_query":
 		return n.executeDeepQuery(ctx, s, decision)
 	case "report":
@@ -78,22 +82,33 @@ func (n *ActionNode) executeContinue(ctx context.Context, s *state.State, decisi
 		return s, nil
 	}
 
-	var observations []string
+	// 并发执行所有 ToolCalls
+	var wg sync.WaitGroup
+	results := make([]string, len(decision.ToolCalls))
+	var mu sync.Mutex
 
-	// 遍历 ToolCalls
-	for _, tc := range decision.ToolCalls {
-		obs, err := n.executeToolCall(ctx, s, tc)
-		if err != nil {
-			logger.Error("ActionNode: tool call failed",
-				logger.String("tool", tc.Name),
-				logger.Err(err))
-			obs = fmt.Sprintf("工具 %s 执行失败: %v", tc.Name, err)
-		}
-		observations = append(observations, fmt.Sprintf("[%s]\n%s", tc.Name, obs))
+	for i, tc := range decision.ToolCalls {
+		wg.Add(1)
+		go func(index int, toolCall state.ToolCall) {
+			defer wg.Done()
+
+			obs, err := n.executeToolCall(ctx, s, toolCall)
+			if err != nil {
+				logger.Error("ActionNode: tool call failed",
+					logger.String("tool", toolCall.Name),
+					logger.Err(err))
+				obs = fmt.Sprintf("工具 %s 执行失败: %v", toolCall.Name, err)
+			}
+
+			mu.Lock()
+			results[index] = fmt.Sprintf("[%s]\n%s", toolCall.Name, obs)
+			mu.Unlock()
+		}(i, tc)
 	}
+	wg.Wait()
 
 	// 合并所有观察结果
-	mergedObservation := strings.Join(observations, "\n\n")
+	mergedObservation := strings.Join(results, "\n\n")
 
 	// 更新最后一个 ReasoningStep 的 Observation
 	history := s.GetReasoningHistory()
@@ -104,6 +119,64 @@ func (n *ActionNode) executeContinue(ctx context.Context, s *state.State, decisi
 
 	logger.Info("ActionNode: continue mode completed",
 		logger.Int("tool_calls", len(decision.ToolCalls)))
+
+	return s, nil
+}
+
+// executePlan 执行计划模式
+func (n *ActionNode) executePlan(ctx context.Context, s *state.State, decision *DecisionOutput) (*state.State, error) {
+	// 从 Plan 中提取所有工具调用
+	var allToolCalls []state.ToolCall
+	for _, step := range decision.Plan {
+		allToolCalls = append(allToolCalls, step.ToolCalls...)
+	}
+
+	if len(allToolCalls) == 0 {
+		logger.Warn("ActionNode: no tool calls in execute_plan mode")
+		return s, nil
+	}
+
+	logger.Info("ActionNode: executing plan",
+		logger.Int("steps", len(decision.Plan)),
+		logger.Int("total_tool_calls", len(allToolCalls)))
+
+	// 并发执行所有 ToolCalls
+	var wg sync.WaitGroup
+	results := make([]string, len(allToolCalls))
+	var mu sync.Mutex
+
+	for i, tc := range allToolCalls {
+		wg.Add(1)
+		go func(index int, toolCall state.ToolCall) {
+			defer wg.Done()
+
+			obs, err := n.executeToolCall(ctx, s, toolCall)
+			if err != nil {
+				logger.Error("ActionNode: tool call failed",
+					logger.String("tool", toolCall.Name),
+					logger.Err(err))
+				obs = fmt.Sprintf("工具 %s 执行失败: %v", toolCall.Name, err)
+			}
+
+			mu.Lock()
+			results[index] = fmt.Sprintf("[%s]\n%s", toolCall.Name, obs)
+			mu.Unlock()
+		}(i, tc)
+	}
+	wg.Wait()
+
+	// 合并所有观察结果
+	mergedObservation := strings.Join(results, "\n\n")
+
+	// 更新最后一个 ReasoningStep 的 Observation
+	history := s.GetReasoningHistory()
+	if len(history) > 0 {
+		lastStep := &history[len(history)-1]
+		lastStep.Observation = mergedObservation
+	}
+
+	logger.Info("ActionNode: execute_plan mode completed",
+		logger.Int("tool_calls", len(allToolCalls)))
 
 	return s, nil
 }

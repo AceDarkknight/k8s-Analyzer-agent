@@ -27,7 +27,7 @@ const defaultToolsList = `- list_pods: 列出 Pod 列表。参数: namespace, la
 - execute_safe_command: 在集群节点上执行 Shell 命令（需通过安全审计）。参数: command, reason`
 
 // DecisionPrompt 模板
-const decisionPromptTemplate = `你是一个 Kubernetes 集群诊断专家。你的任务是分析集群状态，决定下一步诊断行动。
+const decisionPromptTemplate = `你是一个 Kubernetes 集群诊断专家。你的任务是分析集群状态，制定完整诊断计划。
 
 ## 用户查询
 {user_query}
@@ -52,30 +52,32 @@ const decisionPromptTemplate = `你是一个 Kubernetes 集群诊断专家。你
 ## Thought 格式要求
 你的 thought 必须包含以下三部分：
 1. **当前认知**：基于已有信息，目前了解到什么？有哪些异常？
-2. **初步计划**：接下来打算按什么顺序调查？（列出 2-3 步）
-3. **本轮行动**：这一轮具体执行计划中的哪一步？为什么？
+2. **完整诊断计划**：针对每个异常资源，列出需要执行的所有诊断步骤（describe、logs、events等）
+3. **本轮执行**：说明本轮要执行计划中的哪些步骤
 
-注意：计划是动态的，每轮根据新发现调整。如果之前有命令被安全审计拒绝，请参考拒绝建议调整命令。
+注意：如果之前有命令被安全审计拒绝，必须参考拒绝建议调整命令。
 
 ## 输出格式（严格 JSON，不要包含其他内容）
 {
-  "thought": "你的完整推理过程（含当前认知、初步计划、本轮行动）",
-  "decision": "continue 或 deep_query 或 report",
-  "tool_calls": [
+  "thought": "你的完整推理过程",
+  "decision": "execute_plan 或 deep_query 或 report",
+  "plan": [
     {
-      "name": "工具名",
-      "args": { "参数名": "参数值" }
+      "step": 1,
+      "description": "步骤描述",
+      "tool_calls": [{"name": "工具名", "args": {}}]
     }
   ],
-  "deep_query_topic": "仅当 decision=deep_query 时填写，描述需要深入调查的问题"
+  "execute_steps": [1, 2],
+  "deep_query_topic": "仅当 decision=deep_query 时填写"
 }
 
 决策规则：
-- 如果明确知道要调哪些工具 → decision = "continue"，并指定 tool_calls
-- 如果需要多步关联调查，无法预先确定步骤 → decision = "deep_query"，填写 deep_query_topic
-- 如果已收集到足够信息可以给出诊断 → decision = "report"，tool_calls 为空数组
+- 如果能制定完整诊断计划 → decision = "execute_plan"，填写 plan 和 execute_steps
+- 如果需要多步关联调查，无法预先确定步骤 → decision = "deep_query"
+- 如果已收集到足够信息可以给出诊断 → decision = "report"，plan 为空数组
 - 如果已达到第 {max_iterations} 轮 → 必须 decision = "report"
-- tool_calls 每轮最多 3 个工具调用`
+- 每轮 execute_steps 最多包含 3 个步骤，但 plan 可以包含完整计划`
 
 // 验证阶段决策 Prompt 模板
 const verifyDecisionPromptTemplate = `你是一个 Kubernetes 诊断专家，当前处于验证阶段。
@@ -130,6 +132,8 @@ const synthesizePromptTemplate = `{verify_phase_header}你是一个 Kubernetes �
 {command_summary}
 
 {blocked_commands_block}
+
+{reasoning_chain}
 
 ## 报告输出格式（严格 JSON）
 {
@@ -295,8 +299,12 @@ func BuildDecisionPrompt(s *state.State) string {
 	if len(steps) > 0 {
 		var stepStrs []string
 		for i, step := range steps {
-			stepStrs = append(stepStrs, fmt.Sprintf("步骤 %d: %s (决策: %s)",
-				i+1, step.Thought, step.Decision))
+			observation := step.Observation
+			if len(observation) > 200 {
+				observation = observation[:200] + "..."
+			}
+			stepStrs = append(stepStrs, fmt.Sprintf("步骤 %d:\n  思考: %s\n  决策: %s\n  观察: %s",
+				i+1, step.Thought, step.Decision, observation))
 		}
 		recentSteps = strings.Join(stepStrs, "\n")
 	}
@@ -347,7 +355,12 @@ func BuildVerifyDecisionPrompt(s *state.State) string {
 			if !e.Success {
 				status = "失败"
 			}
-			execStrs = append(execStrs, fmt.Sprintf("- %s (%s)", e.Command, status))
+			output := e.Output
+			if len(output) > 300 {
+				output = output[:300] + "..."
+			}
+			execStrs = append(execStrs, fmt.Sprintf("- %s (%s)\n  输出: %s",
+				e.Command, status, output))
 		}
 		verifyExecs = strings.Join(execStrs, "\n")
 	}
@@ -413,7 +426,12 @@ func BuildSynthesizePrompt(s *state.State) string {
 			if !exec.Success {
 				status = "失败"
 			}
-			cmdStrs = append(cmdStrs, fmt.Sprintf("- %s (%s)", exec.Command, status))
+			outputPreview := exec.Output
+			if len(outputPreview) > 500 {
+				outputPreview = outputPreview[:500] + "...[截断]"
+			}
+			cmdStrs = append(cmdStrs, fmt.Sprintf("- %s (%s)\n  输出摘要: %s",
+				exec.Command, status, outputPreview))
 		}
 		commandSummary = strings.Join(cmdStrs, "\n")
 	}
@@ -431,6 +449,26 @@ func BuildSynthesizePrompt(s *state.State) string {
 		blockedCommandsBlock = strings.Join(blockedStrs, "\n")
 	}
 
+	// 构建完整推理链
+	reasoningChainBlock := ""
+	if len(s.ReasoningHistory) > 0 {
+		var chainStrs []string
+		chainStrs = append(chainStrs, "## 完整推理过程")
+		for i, step := range s.ReasoningHistory {
+			thought := step.Thought
+			if len(thought) > 200 {
+				thought = thought[:200] + "..."
+			}
+			observation := step.Observation
+			if len(observation) > 300 {
+				observation = observation[:300] + "..."
+			}
+			chainStrs = append(chainStrs, fmt.Sprintf("轮次%d [%s]:\n思考: %s\n工具结果: %s",
+				i+1, step.Decision, thought, observation))
+		}
+		reasoningChainBlock = strings.Join(chainStrs, "\n")
+	}
+
 	replacer := strings.NewReplacer(
 		"{verify_phase_header}", verifyHeader,
 		"{user_query}", s.UserInput,
@@ -439,6 +477,7 @@ func BuildSynthesizePrompt(s *state.State) string {
 		"{findings}", findings,
 		"{command_summary}", commandSummary,
 		"{blocked_commands_block}", blockedCommandsBlock,
+		"{reasoning_chain}", reasoningChainBlock,
 	)
 
 	return replacer.Replace(synthesizePromptTemplate)

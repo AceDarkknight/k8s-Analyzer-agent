@@ -52,7 +52,7 @@ func (k *K8sInfo) GetSummary() string {
 	return strings.Join(parts, "\n")
 }
 
-// GetAbnormalPods 返回异常 Pod 列表（状态非 Running/Succeeded）
+// GetAbnormalPods 返回异常 Pod 列表（状态非 Running/Succeeded，或重启次数过多）
 func (k *K8sInfo) GetAbnormalPods() []PodInfo {
 	if k == nil || k.Resources == nil {
 		return nil
@@ -66,7 +66,9 @@ func (k *K8sInfo) GetAbnormalPods() []PodInfo {
 	var abnormalPods []PodInfo
 	for _, p := range podsList {
 		if pod, ok := p.(PodInfo); ok {
-			if pod.Status != "Running" && pod.Status != "Succeeded" {
+			isAbnormalStatus := pod.Status != "Running" && pod.Status != "Succeeded"
+			isHighRestarts := pod.Restarts >= 5 // 高重启次数即使 Running 也标记异常
+			if isAbnormalStatus || isHighRestarts {
 				abnormalPods = append(abnormalPods, pod)
 			}
 		}
@@ -166,4 +168,11 @@ type CommandExecution struct {
 	Output        string
 	Timestamp     time.Time
 	IsVerifyPhase bool // 是否属于验证迭代阶段
+}
+
+// PlanStep 诊断计划步骤
+type PlanStep struct {
+	Step        int        `json:"step"`
+	Description string     `json:"description"`
+	ToolCalls   []ToolCall `json:"tool_calls"`
 }
