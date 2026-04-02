@@ -12,7 +12,7 @@ import (
 // DecisionResult 决策节点 LLM 响应
 type DecisionResult struct {
 	Thought        string           `json:"thought"`
-	Decision       string           `json:"decision"` // execute_plan / deep_query / report
+	Decision       string           `json:"decision"`   // execute_plan / deep_query / report
 	ToolCalls      []state.ToolCall `json:"tool_calls"` // 兼容旧模式
 	Plan           []state.PlanStep `json:"plan"`       // 新模式
 	ExecuteSteps   []int            `json:"execute_steps"`

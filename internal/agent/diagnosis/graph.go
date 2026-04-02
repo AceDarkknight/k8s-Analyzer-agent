@@ -188,7 +188,7 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 				logger.Error("Graph: ActionNode (verify) failed", logger.Err(err))
 			}
 			logger.Info("Graph: ActionNode (verify) completed")
-			
+
 			// d. CompressNode（验证阶段跳过，因为验证轮数少，无需压缩）
 			if !state.VerifyPhase {
 				logger.Info("Graph: executing CompressNode")
