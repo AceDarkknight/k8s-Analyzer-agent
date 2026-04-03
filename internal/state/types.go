@@ -104,6 +104,34 @@ type ServiceInfo struct {
 	Ports     string
 }
 
+// NodeInfo 节点信息
+type NodeInfo struct {
+	Name   string
+	Status string
+	Roles  string
+	Age    string
+}
+
+// GetNodes 返回节点列表
+func (k *K8sInfo) GetNodes() []NodeInfo {
+	if k == nil || k.Resources == nil {
+		return nil
+	}
+
+	nodesList, ok := k.Resources["Nodes"]
+	if !ok {
+		return nil
+	}
+
+	var nodes []NodeInfo
+	for _, n := range nodesList {
+		if node, ok := n.(NodeInfo); ok {
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes
+}
+
 // Finding 诊断发现
 type Finding struct {
 	Severity  string // critical / warning / info

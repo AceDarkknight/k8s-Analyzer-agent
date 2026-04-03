@@ -529,14 +529,6 @@ func parseServices(stdout string) ([]interface{}, error) {
 	return services, nil
 }
 
-// NodeInfo 节点信息
-type NodeInfo struct {
-	Name   string
-	Status string
-	Roles  string
-	Age    string
-}
-
 // parseNodes 解析节点列表（支持 JSON 和表格格式）
 func parseNodes(stdout string) ([]interface{}, error) {
 	stdout = strings.TrimSpace(stdout)
@@ -581,7 +573,7 @@ func parseNodes(stdout string) ([]interface{}, error) {
 					break
 				}
 			}
-			nodes = append(nodes, NodeInfo{
+			nodes = append(nodes, state.NodeInfo{
 				Name:   item.Metadata.Name,
 				Status: nodeStatus,
 				Roles:  role,
@@ -606,7 +598,7 @@ func parseNodes(stdout string) ([]interface{}, error) {
 		if headerFound {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				nodes = append(nodes, NodeInfo{
+				nodes = append(nodes, state.NodeInfo{
 					Name:   fields[0],
 					Status: fields[1],
 				})

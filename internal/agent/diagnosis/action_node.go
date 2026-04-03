@@ -35,6 +35,7 @@ var toolMapping = map[string]struct {
 	"list_deployments": {"get", "deployments"},
 	"list_services":    {"get", "services"},
 	"get_nodes":        {"get", "nodes"},
+	"describe_node":    {"describe", "node"}, // 获取节点详情（Allocatable、Allocated resources）
 	"list_namespaces":  {"get", "namespaces"},
 	"list_pvc":         {"get", "pvc"}, // 检查 PVC 绑定状态
 }

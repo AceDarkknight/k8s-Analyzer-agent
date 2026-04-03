@@ -18,9 +18,14 @@ const verifyPhaseHeader = `
 // 可用工具列表
 const defaultToolsList = `### 基础查询
 - list_pods: 列出 Pod 列表。参数: namespace, labelSelector
-- describe_pod: 查看 Pod 详情。参数: namespace, name
+- describe_pod: 查看 Pod 详情（包含 resources.requests/limits）。参数: namespace, name
 - get_pod_logs: 获取 Pod 日志。参数: namespace, name, container, tailLines
-- get_nodes: 查看节点状态。无参数
+
+### 节点查询
+- get_nodes: 查看节点列表。无参数
+- describe_node: 查看节点详情。参数: name
+  → **包含 Allocatable 和 Allocated resources（用于计算剩余 CPU/Memory）**
+  → 当 Pending 原因是 Insufficient cpu/memory 时必须使用
 
 ### 事件查询（重要）
 - get_pod_events: 获取指定 Pod 的事件。参数: namespace, podName
@@ -64,10 +69,17 @@ const decisionPromptTemplate = `你是 Kubernetes 集群诊断专家。你的职
 
 | Pod 状态 | 必须执行的工具 | 目标 |
 |---------|--------------|------|
-| Pending | get_pod_events + list_pvc | 找到 FailedScheduling 具体原因 |
+| Pending (Insufficient cpu/memory) | get_pod_events + describe_node + describe_pod | 找到调度失败原因，计算节点剩余资源，给出合适的 requests 配置建议 |
+| Pending (其他原因) | get_pod_events + list_pvc | 找到 FailedScheduling 具体原因 |
 | CrashLoopBackOff | get_pod_logs + get_pod_events | 找到崩溃错误信息 |
 | ImagePullBackOff | describe_pod | 找到镜像拉取失败原因 |
 | OOMKilled | describe_pod + get_pod_logs | 找到内存耗尽原因 |
+
+### 资源计算指引（Insufficient cpu/memory 时使用）
+1. 用 describe_node 获取节点的 Allocatable 和 Allocated resources
+2. 用 describe_pod 获取 Pending Pod 的 requests
+3. 计算: 剩余资源 = Allocatable - Allocated
+4. 给出建议: 如果 Pod requests > 剩余资源，建议调整 requests 为剩余资源的 80%
 
 ## 输出格式（严格 JSON）
 {
@@ -96,6 +108,12 @@ const verifyDecisionPromptTemplate = `你是一个 Kubernetes 诊断专家，当
 ## 初步根因
 {initial_root_cause}
 
+## 异常 Pod 列表（已知信息，直接使用）
+{abnormal_pods}
+
+## 节点列表（用于 describe_node）
+{node_list}
+
 ## 待验证疑点清单
 {recommendations_checklist}
 
@@ -110,7 +128,9 @@ const verifyDecisionPromptTemplate = `你是一个 Kubernetes 诊断专家，当
 
 ## 严格约束（必须遵守）
 - 只验证上面清单中的疑点，不得开展新的调查方向
+- 使用上面「异常 Pod 列表」中的命名空间和 Pod 名，不要用复合命令查找
 - tool_calls 的参数必须指向清单中明确提到的资源（命名空间、Pod 名、资源类型）
+- **如果异常 Pod 是 Pending 且原因是 Insufficient cpu/memory，必须调用 describe_node(name="上面节点列表中的节点名") 获取节点资源详情**
 - 每轮最多 2 个 tool_calls
 - 如果清单中的疑点已基本验证完毕，或已达到最大验证轮数，必须 decision=report
 
@@ -348,6 +368,33 @@ func BuildVerifyDecisionPrompt(s *state.State) string {
 		return ""
 	}
 
+	// 构建异常 Pod 列表（包含命名空间）
+	abnormalPods := "无"
+	if s.K8sInfo != nil {
+		pods := s.K8sInfo.GetAbnormalPods()
+		if len(pods) > 0 {
+			var podStrs []string
+			for _, p := range pods {
+				podStrs = append(podStrs, fmt.Sprintf("- 命名空间: %s, Pod名: %s, 状态: %s",
+					p.Namespace, p.Name, p.Status))
+			}
+			abnormalPods = strings.Join(podStrs, "\n")
+		}
+	}
+
+	// 构建节点列表（用于 describe_node）
+	nodeList := "无"
+	if s.K8sInfo != nil {
+		nodes := s.K8sInfo.GetNodes()
+		if len(nodes) > 0 {
+			var nodeStrs []string
+			for _, n := range nodes {
+				nodeStrs = append(nodeStrs, fmt.Sprintf("- 节点名: %s, 状态: %s", n.Name, n.Status))
+			}
+			nodeList = strings.Join(nodeStrs, "\n")
+		}
+	}
+
 	// 构建待验证清单
 	var checklistItems []string
 	for i, rec := range s.AnalysisResult.Recommendations {
@@ -387,6 +434,8 @@ func BuildVerifyDecisionPrompt(s *state.State) string {
 
 	replacer := strings.NewReplacer(
 		"{initial_root_cause}", rootCause,
+		"{abnormal_pods}", abnormalPods,
+		"{node_list}", nodeList,
 		"{recommendations_checklist}", checklist,
 		"{verify_executions}", verifyExecs,
 		"{verify_iter}", fmt.Sprintf("%d", s.VerifyIterationCount),
@@ -442,8 +491,9 @@ func BuildSynthesizePrompt(s *state.State) string {
 				status = "失败"
 			}
 			outputPreview := exec.Output
-			if len(outputPreview) > 500 {
-				outputPreview = outputPreview[:500] + "...[截断]"
+			// 增加截断阈值以保留更多关键信息（如 describe_node 的 Allocatable/Allocated）
+			if len(outputPreview) > 4000 {
+				outputPreview = outputPreview[:4000] + "...[截断]"
 			}
 			cmdStrs = append(cmdStrs, fmt.Sprintf("- %s (%s)\n  输出摘要: %s",
 				exec.Command, status, outputPreview))

@@ -59,6 +59,15 @@ var priorityKeywords = []string{
 	"FailedAttachVolume",
 	"VolumeBinding",
 	"PersistentVolumeClaim",
+	// 资源相关（用于计算节点剩余资源）
+	"Allocatable:",
+	"Allocated resources:",
+	"Resource           Requests",  // Allocated resources 表头
+	"(Total limits",                 // Allocated resources 注释行
+	"cpu:",                          // Allocatable 中的 cpu 行
+	"memory:",                       // Allocatable 中的 memory 行
+	"cpu ",                          // Allocated resources 中的 cpu 行
+	"memory ",                       // Allocated resources 中的 memory 行
 	// 其他关键信息
 	"BackOff",
 	"Failed",
@@ -96,6 +105,8 @@ func (s *OutputSummarizer) Summarize(output string) string {
 			nonEmptyLines = append(nonEmptyLines, line)
 		}
 	}
+
+	_ = totalLines // avoid unused variable warning
 
 	// 构建去重去空后的结果
 	cleanedOutput := strings.Join(nonEmptyLines, "\n")
