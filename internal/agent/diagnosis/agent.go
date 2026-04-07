@@ -2,6 +2,7 @@ package diagnosis
 
 import (
 	"context"
+	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
@@ -26,15 +27,22 @@ func NewAgent(
 	router *llm.LLMRouter,
 	reactLLM *llm.ReActLLM,
 	findingStore store.FindingStore,
+	toolCache store.ToolCacheStore,
 	cfg *config.AgentConfig,
 ) *Agent {
 	// 1. 创建 OutputSummarizer
 	sum := summarizer.NewOutputSummarizer(cfg.OutputMaxLines, cfg.OutputMaxChars)
 
+	// 解析缓存 TTL
+	cacheTTL, err := time.ParseDuration(cfg.ToolCache.TTL)
+	if err != nil {
+		cacheTTL = 10 * time.Minute
+	}
+
 	// 2. 创建各节点
-	infoNode := NewInfoNode(gw)
+	infoNode := NewInfoNode(gw, cfg.MaxNamespaces)
 	decisionNode := NewDecisionNode(router)
-	actionNode := NewActionNode(gw, sa, reactLLM, sum)
+	actionNode := NewActionNode(gw, sa, reactLLM, sum, toolCache, cacheTTL)
 	compressNode := NewCompressNode(cfg.CompressThreshold, 3)
 	reportNode := NewReportNode(router, findingStore)
 

@@ -65,6 +65,26 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 		}, nil
 	}
 
+	// 主诊断阶段：检查缓存命中率（连续 2 轮 100% 命中 → 无新信息，提前终止）
+	if !s.VerifyPhase && s.GetIterationCount() >= 2 {
+		allCacheHit := true
+		for i := s.GetIterationCount() - 1; i >= s.GetIterationCount()-2 && i >= 1; i-- {
+			stats := s.GetRoundCacheStats(i)
+			if stats == nil || stats.TotalCalls == 0 || stats.CacheHits < stats.TotalCalls {
+				allCacheHit = false
+				break
+			}
+		}
+		if allCacheHit {
+			logger.Info("DecisionNode: consecutive rounds all cache hits, no new info, forcing report")
+			return &DecisionOutput{
+				Decision:  "report",
+				Thought:   "连续 2 轮工具调用全部命中缓存，没有新信息，基于已有数据生成报告",
+				ToolCalls: []state.ToolCall{},
+			}, nil
+		}
+	}
+
 	// 主诊断阶段：增加迭代计数
 	if !s.VerifyPhase {
 		s.IncrementIteration()

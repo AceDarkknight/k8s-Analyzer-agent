@@ -337,3 +337,75 @@ func TestStateMethodsWithNil(t *testing.T) {
 		t.Error("GetRecentSteps should return nil for nil state")
 	}
 }
+
+// TestRecordCacheHitAndMiss 测试缓存命中/未命中记录
+func TestRecordCacheHitAndMiss(t *testing.T) {
+	s := NewState("test", 10, 4)
+
+	// 初始状态无统计
+	stats := s.GetRoundCacheStats(1)
+	if stats != nil {
+		t.Error("expected nil stats for unrecorded iteration")
+	}
+
+	// 记录迭代 1 的命中和未命中
+	s.RecordCacheHit(1)
+	s.RecordCacheHit(1)
+	s.RecordCacheMiss(1)
+
+	stats = s.GetRoundCacheStats(1)
+	if stats == nil {
+		t.Fatal("expected non-nil stats for iteration 1")
+	}
+	if stats.TotalCalls != 3 {
+		t.Errorf("expected TotalCalls=3, got %d", stats.TotalCalls)
+	}
+	if stats.CacheHits != 2 {
+		t.Errorf("expected CacheHits=2, got %d", stats.CacheHits)
+	}
+
+	// 迭代 2 应该独立
+	s.RecordCacheMiss(2)
+	stats2 := s.GetRoundCacheStats(2)
+	if stats2 == nil {
+		t.Fatal("expected non-nil stats for iteration 2")
+	}
+	if stats2.TotalCalls != 1 {
+		t.Errorf("expected TotalCalls=1 for iter 2, got %d", stats2.TotalCalls)
+	}
+	if stats2.CacheHits != 0 {
+		t.Errorf("expected CacheHits=0 for iter 2, got %d", stats2.CacheHits)
+	}
+
+	// 迭代 1 不受影响
+	stats1 := s.GetRoundCacheStats(1)
+	if stats1.TotalCalls != 3 {
+		t.Errorf("iter 1 stats changed unexpectedly: TotalCalls=%d", stats1.TotalCalls)
+	}
+}
+
+// TestRecordCacheWithNilState 测试 nil State 不 panic
+func TestRecordCacheWithNilState(t *testing.T) {
+	var s *State
+	// 不应 panic
+	s.RecordCacheHit(1)
+	s.RecordCacheMiss(1)
+	if s.GetRoundCacheStats(1) != nil {
+		t.Error("expected nil from nil state")
+	}
+}
+
+// TestCacheStatsAllHit 测试全部命中场景
+func TestCacheStatsAllHit(t *testing.T) {
+	s := NewState("test", 10, 4)
+
+	// 全部命中
+	s.RecordCacheHit(1)
+	s.RecordCacheHit(1)
+	s.RecordCacheHit(1)
+
+	stats := s.GetRoundCacheStats(1)
+	if stats.TotalCalls != 3 || stats.CacheHits != 3 {
+		t.Errorf("expected all hits: Total=%d, Hits=%d", stats.TotalCalls, stats.CacheHits)
+	}
+}

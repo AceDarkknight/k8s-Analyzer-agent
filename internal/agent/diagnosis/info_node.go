@@ -14,13 +14,16 @@ import (
 
 // InfoNode 信息收集节点
 type InfoNode struct {
-	gateway *gateway.GatewayClient
+	gateway       *gateway.GatewayClient
+	maxNamespaces int // 动态 namespace 上限，0 表示使用动态计算
 }
 
 // NewInfoNode 创建新的信息收集节点
-func NewInfoNode(gw *gateway.GatewayClient) *InfoNode {
+// maxNamespaces: 配置的 namespace 上限，0 表示使用动态计算
+func NewInfoNode(gw *gateway.GatewayClient, maxNamespaces int) *InfoNode {
 	return &InfoNode{
-		gateway: gw,
+		gateway:       gw,
+		maxNamespaces: maxNamespaces,
 	}
 }
 
@@ -77,11 +80,14 @@ func (n *InfoNode) Execute(ctx context.Context, s *state.State) (*state.State, e
 			targetNamespaces = []string{"default"}
 		}
 	} else {
-		// 使用全部命名空间，但限制最多5个
-		targetNamespaces = namespaces
-		if len(targetNamespaces) > 5 {
-			targetNamespaces = targetNamespaces[:5]
-			logger.Info("InfoNode: limiting namespaces to 5", logger.Int("total", len(namespaces)))
+		// 动态计算 namespace 扫描上限
+		limit := n.calcNamespaceLimit(len(namespaces))
+		targetNamespaces = n.prioritizeNamespaces(namespaces)
+		if len(targetNamespaces) > limit {
+			targetNamespaces = targetNamespaces[:limit]
+			logger.Info("InfoNode: limiting namespaces dynamically",
+				logger.Int("total", len(namespaces)),
+				logger.Int("limit", limit))
 		}
 	}
 
@@ -659,4 +665,42 @@ func parseEvents(stdout string) ([]interface{}, error) {
 
 	// JSON 解析失败，返回空列表
 	return []interface{}{}, nil
+}
+
+// calcNamespaceLimit 根据集群 namespace 总数动态计算扫描上限
+// 规则：≤8 全扫、≤20 取 10、>20 取 15；如果配置了 maxNamespaces 则以配置为准
+func (n *InfoNode) calcNamespaceLimit(total int) int {
+	if n.maxNamespaces > 0 {
+		return n.maxNamespaces
+	}
+	switch {
+	case total <= 8:
+		return total
+	case total <= 20:
+		return 10
+	default:
+		return 15
+	}
+}
+
+// prioritizeNamespaces 对 namespace 进行优先级排序
+// 将业务相关 namespace 排在前面，系统 namespace（kube-*）排在后面
+func (n *InfoNode) prioritizeNamespaces(namespaces []string) []string {
+	var priority, system, others []string
+	for _, ns := range namespaces {
+		switch {
+		case ns == "default":
+			priority = append(priority, ns)
+		case strings.HasPrefix(ns, "kube-"):
+			system = append(system, ns)
+		default:
+			others = append(others, ns)
+		}
+	}
+	// 业务 namespace → default → 系统 namespace
+	result := make([]string, 0, len(namespaces))
+	result = append(result, others...)
+	result = append(result, priority...)
+	result = append(result, system...)
+	return result
 }

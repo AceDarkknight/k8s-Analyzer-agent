@@ -65,15 +65,24 @@ type RedisConfig struct {
 	DB       int    `yaml:"db"`
 }
 
+// ToolCacheConfig 工具缓存配置
+type ToolCacheConfig struct {
+	Backend string `yaml:"backend"`  // "memory" | "redis" | "file"，默认 "memory"
+	TTL     string `yaml:"ttl"`      // 缓存过期时间，如 "10m"，默认 "10m"
+	FileDir string `yaml:"file_dir"` // backend=file 时的缓存目录
+}
+
 // AgentConfig Agent 行为配置
 type AgentConfig struct {
-	MaxIterations         int  `yaml:"max_iterations"`         // 默认 10
-	CompressThreshold     int  `yaml:"compress_threshold"`     // 默认 4
-	OutputMaxLines        int  `yaml:"output_max_lines"`       // 默认 50
-	OutputMaxChars        int  `yaml:"output_max_chars"`       // 默认 3000
-	FindingTTLHours       int  `yaml:"finding_ttl_hours"`      // 默认 1
-	VerifyRecommendations bool `yaml:"verify_recommendations"` // 是否启用验证迭代，默认 true
-	MaxVerifyIterations   int  `yaml:"max_verify_iterations"`  // 验证阶段最大迭代数，默认 2
+	MaxIterations         int             `yaml:"max_iterations"`         // 默认 10
+	CompressThreshold     int             `yaml:"compress_threshold"`     // 默认 4
+	OutputMaxLines        int             `yaml:"output_max_lines"`       // 默认 50
+	OutputMaxChars        int             `yaml:"output_max_chars"`       // 默认 3000
+	FindingTTLHours       int             `yaml:"finding_ttl_hours"`      // 默认 1
+	VerifyRecommendations bool            `yaml:"verify_recommendations"` // 是否启用验证迭代，默认 true
+	MaxVerifyIterations   int             `yaml:"max_verify_iterations"`  // 验证阶段最大迭代数，默认 2
+	MaxNamespaces         int             `yaml:"max_namespaces"`         // 0=动态计算，>0=固定上限
+	ToolCache             ToolCacheConfig `yaml:"tool_cache"`             // 工具调用缓存配置
 }
 
 // LogConfig 日志配置
@@ -190,6 +199,12 @@ func (c *Config) setDefaults() {
 	// 因此这里不做特殊处理，由调用方判断 if cfg.Agent.VerifyRecommendations
 	if c.Agent.MaxVerifyIterations == 0 {
 		c.Agent.MaxVerifyIterations = 2
+	}
+	if c.Agent.ToolCache.Backend == "" {
+		c.Agent.ToolCache.Backend = "memory"
+	}
+	if c.Agent.ToolCache.TTL == "" {
+		c.Agent.ToolCache.TTL = "10m"
 	}
 }
 

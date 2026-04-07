@@ -26,6 +26,8 @@ type State struct {
 	VerifyPhase          bool // 是否处于验证迭代阶段
 	VerifyIterationCount int  // 验证阶段已用迭代次数
 	MaxVerifyIterations  int  // 验证阶段最大迭代数（来自 config）
+	// 缓存命中统计（按轮次）
+	CacheStats map[int]*RoundCacheStats
 }
 
 // NewState 创建新的 State
@@ -46,6 +48,7 @@ func NewState(userInput string, maxIterations, compressThreshold int) *State {
 		ReasoningHistory:  make([]ReasoningStep, 0),
 		CommandExecutions: make([]CommandExecution, 0),
 		BlockedCommands:   make([]BlockedCommand, 0),
+		CacheStats:        make(map[int]*RoundCacheStats),
 	}
 }
 
@@ -326,4 +329,45 @@ func (s *State) HasUnverifiedRecommendations() bool {
 		}
 	}
 	return false
+}
+
+// RecordCacheHit 记录当前轮次的缓存命中
+func (s *State) RecordCacheHit(iteration int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stats := s.getOrCreateCacheStats(iteration)
+	stats.TotalCalls++
+	stats.CacheHits++
+}
+
+// RecordCacheMiss 记录当前轮次的缓存未命中
+func (s *State) RecordCacheMiss(iteration int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stats := s.getOrCreateCacheStats(iteration)
+	stats.TotalCalls++
+}
+
+// GetRoundCacheStats 获取指定轮次的缓存统计
+func (s *State) GetRoundCacheStats(iteration int) *RoundCacheStats {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.CacheStats[iteration]
+}
+
+// getOrCreateCacheStats 获取或创建指定轮次的缓存统计（需持有锁）
+func (s *State) getOrCreateCacheStats(iteration int) *RoundCacheStats {
+	if s.CacheStats[iteration] == nil {
+		s.CacheStats[iteration] = &RoundCacheStats{}
+	}
+	return s.CacheStats[iteration]
 }

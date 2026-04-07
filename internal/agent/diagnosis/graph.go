@@ -174,53 +174,65 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 	logger.Info("Graph: ReportNode completed")
 
 	// 4. 验证阶段：检查是否需要进入验证迭代
+	//    跳过条件：所有 Recommendations 都没有 Command（纯建议型，无法验证）
 	if g.verifyEnabled && state.AnalysisResult != nil && len(state.AnalysisResult.Recommendations) > 0 && !state.VerifyPhase {
-		logger.Info("Graph: entering verify phase")
-		state.EnterVerifyPhase(g.maxVerifyIterations)
-
-		// 验证迭代循环
-		for {
-			// a. DecisionNode（验证模式）
-			logger.Info("Graph: executing DecisionNode (verify phase)")
-			decisionOutput, err := g.decisionNode.Execute(ctx, state)
-			if err != nil {
-				logger.Error("Graph: DecisionNode (verify) failed", logger.Err(err))
+		hasVerifiable := false
+		for _, rec := range state.AnalysisResult.Recommendations {
+			if rec.Command != "" {
+				hasVerifiable = true
 				break
 			}
-			logger.Info("Graph: DecisionNode (verify) completed", logger.String("decision", decisionOutput.Decision))
+		}
+		if !hasVerifiable {
+			logger.Info("Graph: all recommendations are suggestion-only (no command), skipping verify phase")
+		} else {
+			logger.Info("Graph: entering verify phase")
+			state.EnterVerifyPhase(g.maxVerifyIterations)
 
-			// b. 如果 decision == "report" → 跳出验证循环
-			if decisionOutput.Decision == "report" {
-				logger.Info("Graph: verify phase decision is report, breaking loop")
-				break
-			}
-
-			// c. ActionNode（验证模式）
-			logger.Info("Graph: executing ActionNode (verify phase)")
-			state, err = g.actionNode.Execute(ctx, state, decisionOutput)
-			if err != nil {
-				logger.Error("Graph: ActionNode (verify) failed", logger.Err(err))
-			}
-			logger.Info("Graph: ActionNode (verify) completed")
-
-			// d. CompressNode（验证阶段跳过，因为验证轮数少，无需压缩）
-			if !state.VerifyPhase {
-				logger.Info("Graph: executing CompressNode")
-				state, err = g.compressNode.Execute(ctx, state)
+			// 验证迭代循环
+			for {
+				// a. DecisionNode（验证模式）
+				logger.Info("Graph: executing DecisionNode (verify phase)")
+				decisionOutput, err := g.decisionNode.Execute(ctx, state)
 				if err != nil {
-					logger.Error("Graph: CompressNode failed", logger.Err(err))
+					logger.Error("Graph: DecisionNode (verify) failed", logger.Err(err))
+					break
 				}
-				logger.Info("Graph: CompressNode completed")
-			}
-		}
+				logger.Info("Graph: DecisionNode (verify) completed", logger.String("decision", decisionOutput.Decision))
 
-		// 5. 生成终版报告
-		logger.Info("Graph: executing ReportNode for final report")
-		state, err = g.reportNode.Execute(ctx, state)
-		if err != nil {
-			logger.Error("Graph: final ReportNode failed", logger.Err(err))
+				// b. 如果 decision == "report" → 跳出验证循环
+				if decisionOutput.Decision == "report" {
+					logger.Info("Graph: verify phase decision is report, breaking loop")
+					break
+				}
+
+				// c. ActionNode（验证模式）
+				logger.Info("Graph: executing ActionNode (verify phase)")
+				state, err = g.actionNode.Execute(ctx, state, decisionOutput)
+				if err != nil {
+					logger.Error("Graph: ActionNode (verify) failed", logger.Err(err))
+				}
+				logger.Info("Graph: ActionNode (verify) completed")
+
+				// d. CompressNode（验证阶段跳过，因为验证轮数少，无需压缩）
+				if !state.VerifyPhase {
+					logger.Info("Graph: executing CompressNode")
+					state, err = g.compressNode.Execute(ctx, state)
+					if err != nil {
+						logger.Error("Graph: CompressNode failed", logger.Err(err))
+					}
+					logger.Info("Graph: CompressNode completed")
+				}
+			}
+
+			// 5. 生成终版报告
+			logger.Info("Graph: executing ReportNode for final report")
+			state, err = g.reportNode.Execute(ctx, state)
+			if err != nil {
+				logger.Error("Graph: final ReportNode failed", logger.Err(err))
+			}
+			logger.Info("Graph: final ReportNode completed")
 		}
-		logger.Info("Graph: final ReportNode completed")
 	}
 
 	logger.Info("Graph: diagnosis workflow completed")

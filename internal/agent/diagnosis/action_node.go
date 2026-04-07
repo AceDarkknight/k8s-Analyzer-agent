@@ -2,15 +2,19 @@ package diagnosis
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/store"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/summarizer"
 )
 
@@ -20,6 +24,8 @@ type ActionNode struct {
 	safety     *safety.SafetyAgent
 	reactLLM   *llm.ReActLLM
 	summarizer *summarizer.OutputSummarizer
+	toolCache  store.ToolCacheStore
+	cacheTTL   time.Duration
 }
 
 // toolMapping 工具名到 Gateway 请求映射
@@ -46,12 +52,19 @@ func NewActionNode(
 	sa *safety.SafetyAgent,
 	react *llm.ReActLLM,
 	sum *summarizer.OutputSummarizer,
+	toolCache store.ToolCacheStore,
+	cacheTTL time.Duration,
 ) *ActionNode {
+	if cacheTTL <= 0 {
+		cacheTTL = 10 * time.Minute
+	}
 	return &ActionNode{
 		gateway:    gw,
 		safety:     sa,
 		reactLLM:   react,
 		summarizer: sum,
+		toolCache:  toolCache,
+		cacheTTL:   cacheTTL,
 	}
 }
 
@@ -192,10 +205,25 @@ func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc sta
 	logger.Info("ActionNode: executing tool call",
 		logger.String("tool", tc.Name))
 
-	// 处理 execute_safe_command 特殊工具
+	// execute_safe_command 不缓存（有副作用）
 	if tc.Name == "execute_safe_command" {
 		return n.executeSafeCommand(ctx, s, tc)
 	}
+
+	// 检查缓存
+	cacheKey := buildCacheKey(tc)
+	if n.toolCache != nil {
+		if cached, ok, _ := n.toolCache.Get(ctx, cacheKey); ok {
+			logger.Info("ActionNode: cache hit, skipping gateway call",
+				logger.String("tool", tc.Name))
+			s.RecordCacheHit(s.GetIterationCount())
+			// 缓存命中也记录执行（确保报告生成不受影响）
+			cmdStr := buildCmdStr(tc)
+			s.AddCommandExecution(cmdStr, true, cached, s.VerifyPhase)
+			return cached, nil
+		}
+	}
+	s.RecordCacheMiss(s.GetIterationCount())
 
 	// 查找工具映射
 	mapping, ok := toolMapping[tc.Name]
@@ -256,14 +284,13 @@ func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc sta
 	summary := n.summarizer.Summarize(output)
 
 	// 记录命令执行（构建命令字符串用于显示）
-	cmdStr := fmt.Sprintf("kubectl %s %s", mapping.Verb, mapping.Resource)
-	if req.Namespace != "" {
-		cmdStr = fmt.Sprintf("kubectl -n %s %s %s", req.Namespace, mapping.Verb, mapping.Resource)
-	}
-	if req.Name != "" {
-		cmdStr += " " + req.Name
-	}
+	cmdStr := buildCmdStr(tc)
 	s.AddCommandExecution(cmdStr, resp.Status == "success", summary, s.VerifyPhase)
+
+	// 写入缓存
+	if n.toolCache != nil {
+		_ = n.toolCache.Set(ctx, cacheKey, summary, n.cacheTTL)
+	}
 
 	return summary, nil
 }
@@ -341,4 +368,44 @@ func (n *ActionNode) executeDeepQuery(ctx context.Context, s *state.State, decis
 	logger.Info("ActionNode: deep query completed")
 
 	return s, nil
+}
+
+// buildCacheKey 构建工具调用的缓存 key
+func buildCacheKey(tc state.ToolCall) string {
+	// 对 args 进行排序序列化确保一致性
+	argsBytes, _ := json.Marshal(sortedArgs(tc.Args))
+	return tc.Name + ":" + string(argsBytes)
+}
+
+// sortedArgs 返回排序后的 args map
+func sortedArgs(args map[string]interface{}) map[string]interface{} {
+	if len(args) == 0 {
+		return args
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	sorted := make(map[string]interface{}, len(args))
+	for _, k := range keys {
+		sorted[k] = args[k]
+	}
+	return sorted
+}
+
+// buildCmdStr 构建用于显示的命令字符串
+func buildCmdStr(tc state.ToolCall) string {
+	mapping, ok := toolMapping[tc.Name]
+	if !ok {
+		return tc.Name
+	}
+	cmdStr := fmt.Sprintf("kubectl %s %s", mapping.Verb, mapping.Resource)
+	if ns, ok := tc.Args["namespace"].(string); ok && ns != "" {
+		cmdStr = fmt.Sprintf("kubectl -n %s %s %s", ns, mapping.Verb, mapping.Resource)
+	}
+	if name, ok := tc.Args["name"].(string); ok && name != "" {
+		cmdStr += " " + name
+	}
+	return cmdStr
 }

@@ -146,8 +146,40 @@ func main() {
 	}
 	defer findingStore.Close()
 
+	// 10.5 初始化 ToolCacheStore
+	var toolCache store.ToolCacheStore
+	cacheTTL, _ := time.ParseDuration(cfg.Agent.ToolCache.TTL)
+	if cacheTTL <= 0 {
+		cacheTTL = 10 * time.Minute
+	}
+	switch cfg.Agent.ToolCache.Backend {
+	case "redis":
+		if cfg.Store.Type == "redis" {
+			// 复用 FindingStore 的 Redis 连接配置
+			toolCache = store.NewRedisToolCache(nil) // 需要单独创建 redis client
+			logger.Info("ToolCache: Redis 后端（降级为内存）")
+			toolCache = store.NewMemoryToolCache(cacheTTL)
+		} else {
+			logger.Warn("ToolCache: Redis 后端配置但 Store 不是 Redis，降级为内存")
+			toolCache = store.NewMemoryToolCache(cacheTTL)
+		}
+	case "file":
+		fileCache, fcErr := store.NewFileToolCache(cfg.Agent.ToolCache.FileDir)
+		if fcErr != nil {
+			logger.Warn("ToolCache: 文件后端初始化失败，降级为内存", logger.Err(fcErr))
+			toolCache = store.NewMemoryToolCache(cacheTTL)
+		} else {
+			toolCache = fileCache
+			logger.Info("ToolCache: 文件后端初始化成功", logger.String("dir", cfg.Agent.ToolCache.FileDir))
+		}
+	default:
+		toolCache = store.NewMemoryToolCache(cacheTTL)
+		logger.Info("ToolCache: 内存后端初始化成功")
+	}
+	defer toolCache.Close()
+
 	// 11. 初始化 Main Agent
-	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, &cfg.Agent)
+	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, toolCache, &cfg.Agent)
 	logger.Info("Main Agent 初始化成功")
 
 	// 12. 执行诊断

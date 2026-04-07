@@ -56,11 +56,14 @@ const decisionPromptTemplate = `你是 Kubernetes 集群诊断专家。你的职
 
 {compressed_summary_block}
 
+{tool_summary_block}
+
 ## 已执行的步骤
 {recent_steps}
 
 ## 进度
 第 {iteration}/{max_iterations} 轮
+{progress_warning}
 
 ## 可用工具
 {tools_list}
@@ -99,7 +102,9 @@ const decisionPromptTemplate = `你是 Kubernetes 集群诊断专家。你的职
 
 ## 注意
 - 每轮最多 3 个工具调用
-- 必须有具体证据才能下结论，不要仅凭 Pod 状态猜测`
+- 必须有具体证据才能下结论，不要仅凭 Pod 状态猜测
+- 上面「已查询工具记录」中列出的工具已执行过，除非有充分理由（如需要不同参数），否则不要重复调用
+- 如果某工具返回空结果，不要再次调用相同参数`
 
 // 验证阶段决策 Prompt 模板
 const verifyDecisionPromptTemplate = `你是一个 Kubernetes 诊断专家，当前处于验证阶段。
@@ -335,8 +340,8 @@ func BuildDecisionPrompt(s *state.State) string {
 		var stepStrs []string
 		for i, step := range steps {
 			observation := step.Observation
-			if len(observation) > 200 {
-				observation = observation[:200] + "..."
+			if len(observation) > 800 {
+				observation = observation[:800] + "..."
 			}
 			stepStrs = append(stepStrs, fmt.Sprintf("步骤 %d:\n  思考: %s\n  决策: %s\n  观察: %s",
 				i+1, step.Thought, step.Decision, observation))
@@ -344,18 +349,46 @@ func BuildDecisionPrompt(s *state.State) string {
 		recentSteps = strings.Join(stepStrs, "\n")
 	}
 
+	// 构建已执行工具摘要表（避免重复调用）
+	toolSummaryBlock := ""
+	execs := s.GetCommandExecutions()
+	if len(execs) > 0 {
+		var toolLines []string
+		toolLines = append(toolLines, "## 已执行工具摘要")
+		toolLines = append(toolLines, "| # | 命令 | 结果 |")
+		toolLines = append(toolLines, "|---|------|------|")
+		for i, e := range execs {
+			status := "✓"
+			if !e.Success {
+				status = "✗"
+			}
+			cmd := e.Command
+			if len(cmd) > 60 {
+				cmd = cmd[:60] + "..."
+			}
+			toolLines = append(toolLines, fmt.Sprintf("| %d | %s | %s |", i+1, cmd, status))
+		}
+		toolSummaryBlock = strings.Join(toolLines, "\n")
+	}
+
 	// 构建迭代信息
 	iteration := s.GetIterationCount()
 	maxIterations := s.GetMaxIterations()
+	progressWarning := ""
+	if iteration >= maxIterations/2 {
+		progressWarning = fmt.Sprintf("\n⚠️ 已执行 %d/%d 轮，请尽快归纳已有证据并 decision=report。\n如果关键信息已收集完毕（Pending 原因、CrashLoop 日志、节点资源），应立即生成报告。", iteration, maxIterations)
+	}
 
 	replacer := strings.NewReplacer(
 		"{user_query}", s.UserInput,
 		"{resource_summary}", resourceSummary,
 		"{abnormal_pods}", abnormalPods,
 		"{compressed_summary_block}", compressedSummaryBlock,
+		"{tool_summary_block}", toolSummaryBlock,
 		"{recent_steps}", recentSteps,
 		"{iteration}", fmt.Sprintf("%d", iteration),
 		"{max_iterations}", fmt.Sprintf("%d", maxIterations),
+		"{progress_warning}", progressWarning,
 		"{tools_list}", defaultToolsList,
 	)
 
@@ -397,13 +430,16 @@ func BuildVerifyDecisionPrompt(s *state.State) string {
 
 	// 构建待验证清单
 	var checklistItems []string
-	for i, rec := range s.AnalysisResult.Recommendations {
+	for _, rec := range s.AnalysisResult.Recommendations {
+		if rec.Command == "" {
+			continue // 跳过纯建议
+		}
 		status := "尚未验证"
 		if rec.Verified {
 			status = "已验证"
 		}
 		checklistItems = append(checklistItems,
-			fmt.Sprintf("%d. [%s] %s", i+1, status, rec.Action))
+			fmt.Sprintf("%d. [%s] %s", len(checklistItems)+1, status, rec.Action))
 	}
 	checklist := strings.Join(checklistItems, "\n")
 

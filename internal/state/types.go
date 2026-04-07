@@ -204,3 +204,9 @@ type PlanStep struct {
 	Description string     `json:"description"`
 	ToolCalls   []ToolCall `json:"tool_calls"`
 }
+
+// RoundCacheStats 每轮工具调用的缓存命中统计
+type RoundCacheStats struct {
+	TotalCalls int // 该轮总工具调用数
+	CacheHits  int // 缓存命中数
+}
