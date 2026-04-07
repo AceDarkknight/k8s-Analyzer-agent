@@ -1,287 +1,234 @@
 // Package main 提供 k8s-analyzer 的 CLI 入口程序
-// 串联所有模块进行集成测试与验收
 package main
 
 import (
 	"context"
-	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/analysis"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/diagnosis"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
-	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/k8s"
-	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shell"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shellmcp"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
-)
-
-const (
-	// 默认配置文件路径
-	defaultK8sConfigPath   = "bin/k8s_config.json"
-	defaultShellConfigPath = "bin/shell_config.json"
-	defaultLLMConfigPath   = "bin/llm_config.json"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/store"
 )
 
 func main() {
-	// 初始化日志系统
-	if err := logger.InitWithConfig(logger.NewDefaultConfig()); err != nil {
-		fmt.Printf("日志初始化失败: %v\n", err)
+	// 1. 解析命令行参数
+	configPath := flag.String("config", "configs/config.yaml", "配置文件路径")
+	safetyRulesPath := flag.String("safety-rules", "configs/safety_rules.yaml", "安全规则配置文件路径")
+	flag.Parse()
+
+	// 用户查询从剩余参数获取
+	args := flag.Args()
+	if len(args) == 0 {
+		fmt.Println("用法: k8s-analyzer [--config path] [--safety-rules path] <查询内容>")
+		fmt.Println("示例: k8s-analyzer \"分析 default 命名空间下 Pod 异常的原因\"")
+		os.Exit(1)
+	}
+	userQuery := strings.Join(args, " ")
+
+	// 2. 加载配置
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 3. 初始化 Logger
+	logCfg := &logger.LogConfig{
+		Level:      cfg.Log.Level,
+		FilePath:   cfg.Log.FilePath,
+		MaxSizeMB:  cfg.Log.MaxSizeMB,
+		MaxBackups: cfg.Log.MaxBackups,
+	}
+	if err := logger.Init(logCfg); err != nil {
+		fmt.Fprintf(os.Stderr, "初始化日志失败: %v\n", err)
 		os.Exit(1)
 	}
 	defer logger.Sync()
 
-	logger.Info("=== K8s Analyzer Agent 集成测试与验收 ===")
+	logger.Info("K8s Analyzer Agent 启动",
+		logger.String("config", *configPath),
+		logger.String("safety_rules", *safetyRulesPath),
+	)
 
-	ctx := context.Background()
-
-	// 设置优雅退出
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	// 4. Context with cancel (支持 Ctrl+C)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigChan
+		<-sigCh
 		logger.Info("接收到退出信号，正在关闭...")
-		logger.Sync()
-		os.Exit(0)
+		cancel()
 	}()
 
-	// 1. 读取配置文件
-	logger.Info("步骤 1: 读取配置文件...")
-	k8sConfigPath, err := getConfigPath(defaultK8sConfigPath)
+	// 5. 初始化 Gateway Client（Fatal if 失败）
+	gwClient, err := gateway.NewGatewayClient(cfg.Gateway.BaseURL, cfg.Gateway.AuthToken, cfg.Gateway.TimeoutSeconds)
 	if err != nil {
-		logger.Warn("无法获取 K8s 配置路径，使用默认配置", logger.Err(err))
+		logger.Fatal("Gateway Client 初始化失败", logger.Err(err))
 	}
-	shellConfigPath, err := getConfigPath(defaultShellConfigPath)
-	if err != nil {
-		logger.Warn("无法获取 Shell 配置路径，使用默认配置", logger.Err(err))
-	}
+	logger.Info("Gateway Client 初始化成功")
 
-	// 读取 LLM 配置
-	llmConfig, err := loadLLMConfig(defaultLLMConfigPath)
-	if err != nil {
-		logger.Warn("无法读取 LLM 配置，使用默认配置", logger.Err(err))
-		llmConfig = config.DefaultAgentLLMConfig()
-	}
-	logger.Info("LLM 配置加载成功",
-		logger.String("analysis_model", llmConfig.Analysis.Model),
-		logger.String("safety_model", llmConfig.Safety.Model))
+	// 6. 初始化 Shell MCP Client（Warn if 失败，降级模式）
+	var mcpClient *shellmcp.ShellMCPClient
+	mcpClient = shellmcp.NewShellMCPClient(cfg.ShellMCP.ServerURL, cfg.ShellMCP.AuthToken)
 
-	// 2. 初始化 K8s Client
-	logger.Info("步骤 2: 初始化 K8s Client...")
-	k8sClient, err := k8s.NewClientFromFile(k8sConfigPath)
-	if err != nil {
-		logger.Error("K8s Client 初始化失败", logger.Err(err))
-	} else {
-		logger.Info("K8s Client 初始化成功")
-	}
+	// 使用带超时的连接
+	connectDone := make(chan error, 1)
+	go func() {
+		connectDone <- mcpClient.Connect(ctx)
+	}()
 
-	// 3. 初始化 Shell Client
-	logger.Info("步骤 3: 初始化 Shell Client...")
-	shellClient, err := shell.NewClientFromFile(shellConfigPath)
-	if err != nil {
-		logger.Fatal("创建 Shell Client 失败", logger.Err(err))
-	} else {
-		logger.Info("创建 Shell Client 成功")
-	}
-
-	// 4. 连接 K8s Client（关键：必须在创建 Agent 之前连接）
-	logger.Info("步骤 4: 连接 K8s Client...")
-	if k8sClient != nil {
-		if err := k8sClient.Connect(ctx); err != nil {
-			logger.Fatal("K8s Client 连接失败", logger.Err(err))
+	select {
+	case err := <-connectDone:
+		if err != nil {
+			logger.Warn("Shell MCP Client 连接失败，将以降级模式运行", logger.Err(err))
+			mcpClient = nil // 降级：设为 nil
+		} else {
+			logger.Info("Shell MCP Client 连接成功")
+			defer mcpClient.Close()
 		}
-
-		logger.Info("K8s Client 连接成功")
-		defer func() {
-			if err := k8sClient.Close(); err != nil {
-				logger.Error("K8s Client 关闭失败", logger.Err(err))
-			}
-		}()
+	case <-time.After(10 * time.Second):
+		logger.Warn("Shell MCP Client 连接超时，将以降级模式运行")
+		mcpClient = nil // 降级：设为 nil
 	}
 
-	// 5. 连接 Shell Client（关键：必须在创建 Agent 之前连接）
-	logger.Info("步骤 5: 连接 Shell Client...")
-
-	// 创建带超时的 context (20秒超时)
-	connectCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
-	if err := shellClient.Connect(connectCtx); err != nil {
-		logger.Fatal("Shell Client 连接失败", logger.Err(err))
-	} else {
-		logger.Info("Shell Client 连接成功")
-		defer func() {
-			// 清理已连接的资源
-			if err := shellClient.Close(); err != nil {
-				logger.Error("Shell Client 关闭失败", logger.Err(err))
-			}
-		}()
-	}
-
-	// 6. 初始化 Safety Agent（在连接后创建，以便加载工具列表）
-	logger.Info("步骤 6: 初始化 Safety Agent...")
-	// 创建 LLM 审计器（使用基于规则的审计器，传入 Safety 配置）
-	llmAuditor := safety.NewRuleBasedAuditor(&llmConfig.Safety)
-	safetyAgent, err := safety.NewAgent(shellClient, shellConfigPath, llmAuditor)
+	// 7. 初始化 LLM Router
+	llmRouter, err := llm.NewLLMRouter(ctx, &cfg.LLM)
 	if err != nil {
-		logger.Fatal("Safety Agent 初始化失败（工具加载失败）", logger.Err(err))
+		logger.Fatal("LLM Router 初始化失败", logger.Err(err))
 	}
+	logger.Info("LLM Router 初始化成功")
+
+	// 8. 初始化 Safety Agent
+	ruleEngine, err := safety.NewRuleEngine(*safetyRulesPath)
+	if err != nil {
+		logger.Fatal("Rule Engine 初始化失败", logger.Err(err))
+	}
+	logger.Info("Rule Engine 初始化成功")
+
+	var auditor safety.Auditor
+	auditor = safety.NewLLMAuditor(llmRouter.Light())
+
+	safetyAgent := safety.NewSafetyAgent(ruleEngine, auditor, mcpClient)
 	logger.Info("Safety Agent 初始化成功")
 
-	// 7. 初始化 Analysis Agent（在连接后创建，以便加载工具列表）
-	logger.Info("步骤 7: 初始化 Analysis Agent...")
-	analysisAgent, err := analysis.NewAgent(k8sClient, safetyAgent, &llmConfig.Analysis)
-	if err != nil {
-		logger.Fatal("Analysis Agent 初始化失败（工具加载失败）", logger.Err(err))
-	}
-	logger.Info("Analysis Agent 初始化成功")
+	// 9. 初始化 ReAct LLM
+	// 创建适配器将 SafetyAgent 适配为 SafeCommandExecutor 接口
+	safeExecutor := &safetyAgentAdapter{safetyAgent: safetyAgent}
+	reactLLM := llm.NewReActLLM(llmRouter, gwClient, safeExecutor)
+	logger.Info("ReAct LLM 初始化成功")
 
-	// 8. 启动 Agent 并传入示例参数
-	logger.Info("步骤 8: 启动 Analysis Agent 进行分析...")
-	userInput := "执行全集群健康巡检。重点关注：1) 所有命名空间下状态异常的 Pod (非 Running/Succeeded)；2) 未就绪的 Deployment/StatefulSet/DaemonSet或失败的Job/CronJob；3) 关键 Service 的端点有效性；4) 最近 12 小时内的 Warning 级别事件。针对发现的任何故障，请结合日志和事件进行根因分析，并给出具体的修复建议和对应的 shell 命令。"
-	logger.Info("用户输入", logger.String("input", userInput))
-
-	result, err := analysisAgent.Run(ctx, userInput)
-	if err != nil {
-		logger.Error("Analysis Agent 执行失败", logger.Err(err))
-		// 不退出，继续打印部分结果
-	}
-
-	// 9. 打印最终报告
-	logger.Info("步骤 9: 打印分析报告...")
-	printReport(result)
-
-	logger.Info("=== 集成测试与验收完成 ===")
-}
-
-// getConfigPath 获取配置文件的绝对路径
-func getConfigPath(defaultPath string) (string, error) {
-	// 尝试从当前工作目录获取相对路径
-	absPath, err := filepath.Abs(defaultPath)
-	if err != nil {
-		return "", err
-	}
-
-	// 检查文件是否存在
-	if _, err := os.Stat(absPath); err != nil {
-		return "", err
-	}
-
-	return absPath, nil
-}
-
-// loadLLMConfig 加载 LLM 配置文件
-// 配置优先级：环境变量 > 配置文件 > 默认值
-func loadLLMConfig(configPath string) (*config.AgentLLMConfig, error) {
-	// 尝试获取绝对路径
-	absPath, err := filepath.Abs(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("无法获取配置文件绝对路径: %w", err)
-	}
-
-	// 读取配置文件
-	configData, err := os.ReadFile(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("无法读取配置文件: %w", err)
-	}
-
-	// 解析配置
-	var llmConfig config.AgentLLMConfig
-	if err := json.Unmarshal(configData, &llmConfig); err != nil {
-		return nil, fmt.Errorf("无法解析配置文件: %w", err)
-	}
-
-	// 环境变量覆盖配置文件中的值
-	// 优先级：环境变量 > 配置文件
-
-	// Analysis Agent 配置覆盖
-	if apiKey := os.Getenv("ANALYSIS_AGENT_API_KEY"); apiKey != "" {
-		llmConfig.Analysis.APIKey = apiKey
-	}
-	if baseURL := os.Getenv("ANALYSIS_AGENT_BASE_URL"); baseURL != "" {
-		llmConfig.Analysis.BaseURL = baseURL
-	}
-
-	// Safety Agent 配置覆盖
-	if apiKey := os.Getenv("SAFETY_AGENT_API_KEY"); apiKey != "" {
-		llmConfig.Safety.APIKey = apiKey
-	}
-	if baseURL := os.Getenv("SAFETY_AGENT_BASE_URL"); baseURL != "" {
-		llmConfig.Safety.BaseURL = baseURL
-	}
-
-	return &llmConfig, nil
-}
-
-// printReport 打印分析报告
-func printReport(result *analysis.AnalysisResult) {
-	if result == nil {
-		fmt.Println("无分析结果")
-		return
-	}
-
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("分析报告")
-	fmt.Println(strings.Repeat("=", 60))
-
-	// 打印摘要
-	if result.Summary != "" {
-		fmt.Println("\n" + result.Summary)
-	}
-
-	// 打印发现的问题
-	if len(result.Findings) > 0 {
-		fmt.Println("\n发现的问题:")
-		for i, finding := range result.Findings {
-			fmt.Printf("  %d. [%s] %s: %s\n", i+1, finding.Severity, finding.Resource, finding.Message)
+	// 10. 初始化 FindingStore
+	var findingStore store.FindingStore
+	if cfg.Store.Type == "redis" {
+		findingStore, err = store.NewRedisStore(cfg.Store.Redis.Host, cfg.Store.Redis.Port, cfg.Store.Redis.Password, cfg.Store.Redis.DB)
+		if err != nil {
+			logger.Warn("Redis Store 初始化失败，使用内存 Store", logger.Err(err))
+			findingStore = store.NewMemoryStore()
+		} else {
+			logger.Info("Redis Store 初始化成功")
 		}
 	} else {
-		fmt.Println("\n未发现问题")
+		findingStore = store.NewMemoryStore()
+		logger.Info("内存 Store 初始化成功")
+	}
+	defer findingStore.Close()
+
+	// 11. 初始化 Main Agent
+	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, &cfg.Agent)
+	logger.Info("Main Agent 初始化成功")
+
+	// 12. 执行诊断
+	fmt.Printf("开始诊断: %s\n\n", userQuery)
+	result, err := agent.Run(ctx, userQuery)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "诊断失败: %v\n", err)
+		os.Exit(1)
 	}
 
-	// 打印建议
-	if len(result.Recommendations) > 0 {
-		fmt.Println("\n建议:")
-		for i, rec := range result.Recommendations {
-			fmt.Printf("  %d. %s (优先级: %s)\n", i+1, rec.Action, rec.Priority)
-			fmt.Printf("     原因: %s\n", rec.Reason)
-			if rec.Command != "" {
-				fmt.Printf("     命令: %s\n", rec.Command)
-			}
-		}
+	// 13. 输出报告
+	if result != nil {
+		printReport(result)
+	} else {
+		fmt.Println("未能生成诊断报告")
 	}
-
-	// 打印执行的命令
-	if len(result.ExecutedCommands) > 0 {
-		fmt.Println("\n执行的命令:")
-		for i, cmd := range result.ExecutedCommands {
-			fmt.Printf("  %d. %s\n", i+1, cmd.Command)
-			fmt.Printf("     状态: %s\n", getStatusText(cmd.Success))
-			if len(cmd.Output) > 0 {
-				output := cmd.Output
-				if len(output) > 200 {
-					output = output[:200] + "..."
-				}
-				fmt.Printf("     输出: %s\n", output)
-			}
-		}
-	}
-
-	// 打印状态
-	fmt.Printf("\n分析状态: %s\n", result.Status)
-
-	fmt.Println(strings.Repeat("=", 60))
 }
 
-// getStatusText 获取状态文本
-func getStatusText(success bool) string {
-	if success {
-		return "成功"
+// safetyAgentAdapter 将 SafetyAgent 适配为 llm.SafeCommandExecutor 接口
+type safetyAgentAdapter struct {
+	safetyAgent *safety.SafetyAgent
+}
+
+// ExecuteSafeCommand 实现 llm.SafeCommandExecutor 接口
+func (a *safetyAgentAdapter) ExecuteSafeCommand(ctx context.Context, command, reason string) (string, error) {
+	return a.safetyAgent.ExecuteSimple(ctx, command, reason)
+}
+
+func printReport(result *state.AnalysisResult) {
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Printf("诊断报告 [%s]\n", result.Status)
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Printf("\n概要: %s\n", result.Summary)
+	fmt.Printf("严重程度: %s\n", result.Severity)
+	if result.RootCause != "" {
+		fmt.Printf("根因: %s\n", result.RootCause)
 	}
-	return "失败"
+	// 打印 Findings
+	if len(result.Findings) > 0 {
+		fmt.Printf("\n发现 (%d 项):\n", len(result.Findings))
+		for i, f := range result.Findings {
+			fmt.Printf("  %d. [%s] %s: %s\n", i+1, f.Severity, f.Resource, f.Message)
+			if f.Evidence != "" {
+				fmt.Printf("     证据: %s\n", f.Evidence)
+			}
+		}
+	}
+	// 打印 Recommendations
+	if len(result.Recommendations) > 0 {
+		fmt.Printf("\n建议 (%d 项):\n", len(result.Recommendations))
+		for i, r := range result.Recommendations {
+			// 确定图标和标签
+			var icon, label string
+			switch {
+			case r.Verified:
+				icon, label = "✅", "已验证"
+			case r.Command != "":
+				icon, label = "⚠️ ", "需人工操作"
+			default:
+				icon, label = "💡", "建议优化"
+			}
+
+			fmt.Printf("  %d. [%s] %s %s - %s\n", i+1, r.Priority, icon, label, r.Action)
+
+			if r.Verified && r.VerifyResult != "" {
+				fmt.Printf("     验证结果: %s\n", r.VerifyResult)
+			}
+			if r.Command != "" {
+				if r.Verified {
+					fmt.Printf("     命令: %s (已执行)\n", r.Command)
+				} else {
+					fmt.Printf("     命令: %s\n", r.Command)
+				}
+			}
+			if r.Risk != "" && !r.Verified {
+				fmt.Printf("     风险: %s\n", r.Risk)
+			}
+		}
+	}
+	if result.Limitations != "" {
+		fmt.Printf("\n限制: %s\n", result.Limitations)
+	}
+	fmt.Println(strings.Repeat("=", 60))
 }
