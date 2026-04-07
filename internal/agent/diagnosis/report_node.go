@@ -260,7 +260,7 @@ func extractEntityKeywords(text string) []string {
 		return r == ' ' || r == '/' || r == '-' || r == ',' || r == '：' || r == ':'
 	}) {
 		w = strings.Trim(w, ".,;:()[]{}\"'（）")
-		if len(w) > 3 && !stopWords[w] {
+		if len(w) >= 3 && !stopWords[w] {
 			keywords = append(keywords, w)
 		}
 	}

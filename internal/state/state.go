@@ -1,9 +1,14 @@
 package state
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // State Graph 流转状态
 type State struct {
+	mu sync.Mutex
+
 	UserInput         string
 	K8sInfo           *K8sInfo
 	ReasoningHistory  []ReasoningStep
@@ -65,6 +70,8 @@ func (s *State) AddCommandExecution(command string, success bool, output string,
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	exec := CommandExecution{
 		Command:       command,
 		Success:       success,
@@ -80,6 +87,8 @@ func (s *State) AddBlockedCommand(cmd BlockedCommand) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.BlockedCommands = append(s.BlockedCommands, cmd)
 }
 
@@ -161,6 +170,8 @@ func (s *State) GetCommandExecutions() []CommandExecution {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	result := make([]CommandExecution, len(s.CommandExecutions))
 	copy(result, s.CommandExecutions)
 	return result
@@ -171,6 +182,8 @@ func (s *State) GetBlockedCommands() []BlockedCommand {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	result := make([]BlockedCommand, len(s.BlockedCommands))
 	copy(result, s.BlockedCommands)
 	return result
@@ -283,6 +296,8 @@ func (s *State) GetVerifyPhaseExecutions() []CommandExecution {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var result []CommandExecution
 	for _, e := range s.CommandExecutions {
 		if e.IsVerifyPhase {

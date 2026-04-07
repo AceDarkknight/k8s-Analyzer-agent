@@ -114,9 +114,8 @@ func (n *ActionNode) executeContinue(ctx context.Context, s *state.State, decisi
 	mergedObservation := strings.Join(results, "\n\n")
 
 	// 更新最后一个 ReasoningStep 的 Observation
-	history := s.GetReasoningHistory()
-	if len(history) > 0 {
-		lastStep := &history[len(history)-1]
+	lastStep := s.GetLastReasoningStep()
+	if lastStep != nil {
 		lastStep.Observation = mergedObservation
 	}
 
@@ -177,9 +176,8 @@ func (n *ActionNode) executePlan(ctx context.Context, s *state.State, decision *
 	mergedObservation := strings.Join(results, "\n\n")
 
 	// 更新最后一个 ReasoningStep 的 Observation
-	history := s.GetReasoningHistory()
-	if len(history) > 0 {
-		lastStep := &history[len(history)-1]
+	lastStep := s.GetLastReasoningStep()
+	if lastStep != nil {
 		lastStep.Observation = mergedObservation
 	}
 
@@ -335,9 +333,8 @@ func (n *ActionNode) executeDeepQuery(ctx context.Context, s *state.State, decis
 	}
 
 	// 更新最后一个 ReasoningStep 的 Observation
-	history := s.GetReasoningHistory()
-	if len(history) > 0 {
-		lastStep := &history[len(history)-1]
+	lastStep := s.GetLastReasoningStep()
+	if lastStep != nil {
 		lastStep.Observation = result
 	}
 

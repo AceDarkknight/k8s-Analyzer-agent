@@ -239,8 +239,8 @@ func (n *InfoNode) collectClusterEvents(ctx context.Context) ([]interface{}, err
 func extractSpecifiedNamespace(input string) string {
 	input = strings.ToLower(input)
 
-	// 匹配 "namespace:" 或 "命名空间" 关键词
-	patterns := []string{"namespace:", "namespace：", "命名空间", "ns:"}
+	// 匹配 "namespace:" 或 "命名空间" 关键词以及常见命令行参数
+	patterns := []string{"namespace:", "namespace：", "命名空间", "ns:", "-n ", "--namespace "}
 	for _, pattern := range patterns {
 		idx := strings.Index(input, pattern)
 		if idx != -1 {

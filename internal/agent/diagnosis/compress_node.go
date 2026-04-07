@@ -76,9 +76,9 @@ func (n *CompressNode) Execute(ctx context.Context, s *state.State) (*state.Stat
 // ruleSummarize 对步骤进行摘要
 func (n *CompressNode) ruleSummarize(steps []state.ReasoningStep) string {
 	var summaries []string
-	for i, step := range steps {
+	for _, step := range steps {
 		keyFinding := n.extractKeyFinding(step.Observation)
-		summary := fmt.Sprintf("步骤%d: %s → %s", i+1, step.Decision, keyFinding)
+		summary := fmt.Sprintf("迭代%d: %s → %s", step.Iteration, step.Decision, keyFinding)
 		summaries = append(summaries, summary)
 	}
 	return strings.Join(summaries, "\n")
