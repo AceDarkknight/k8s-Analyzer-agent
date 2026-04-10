@@ -8,17 +8,20 @@ import (
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 )
 
 // DecisionNode 决策节点
 type DecisionNode struct {
-	router *llm.LLMRouter
+	router      *llm.LLMRouter
+	skillLoader *skillpkg.Loader
 }
 
 // DecisionOutput 决策输出
 type DecisionOutput struct {
 	Decision       string
+	SkillName      string
 	Thought        string
 	ToolCalls      []state.ToolCall // 兼容旧模式
 	Plan           []state.PlanStep // 新模式：完整计划
@@ -27,9 +30,10 @@ type DecisionOutput struct {
 }
 
 // NewDecisionNode 创建新的决策节点
-func NewDecisionNode(router *llm.LLMRouter) *DecisionNode {
+func NewDecisionNode(router *llm.LLMRouter, skillLoader *skillpkg.Loader) *DecisionNode {
 	return &DecisionNode{
-		router: router,
+		router:      router,
+		skillLoader: skillLoader,
 	}
 }
 
@@ -91,7 +95,18 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 	}
 
 	// 3. 构建 prompt
-	prompt := llm.BuildDecisionPrompt(s)
+	var prompt string
+	if s.VerifyPhase {
+		prompt = llm.BuildVerifyDecisionPrompt(s)
+	} else if s.HasActiveSkill() {
+		prompt = llm.BuildSkillExecutionPrompt(s)
+	} else {
+		skillSummary := ""
+		if n.skillLoader != nil {
+			skillSummary = n.skillLoader.BuildSkillSummary()
+		}
+		prompt = llm.BuildDecisionPrompt(s, skillSummary)
+	}
 	if prompt == "" {
 		logger.Warn("DecisionNode: empty prompt generated")
 		return n.fallbackDecision(s), nil
@@ -162,6 +177,7 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 
 	return &DecisionOutput{
 		Decision:       result.Decision,
+		SkillName:      result.SkillName,
 		Thought:        result.Thought,
 		ToolCalls:      toolCalls,
 		Plan:           plan,

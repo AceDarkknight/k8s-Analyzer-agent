@@ -28,6 +28,9 @@ type State struct {
 	MaxVerifyIterations  int  // 验证阶段最大迭代数（来自 config）
 	// 缓存命中统计（按轮次）
 	CacheStats map[int]*RoundCacheStats
+	// Skill support
+	ActiveSkillName    string
+	ActiveSkillContent string
 }
 
 // NewState 创建新的 State
@@ -50,6 +53,27 @@ func NewState(userInput string, maxIterations, compressThreshold int) *State {
 		BlockedCommands:   make([]BlockedCommand, 0),
 		CacheStats:        make(map[int]*RoundCacheStats),
 	}
+}
+
+// ActivateSkill 为当前会话标记并载入技能内容。仅允许首次激活，后续调用不改变已激活的技能。
+func (s *State) ActivateSkill(name string, content string) {
+	if s == nil {
+		return
+	}
+	// 仅在尚未激活技能时生效
+	if s.HasActiveSkill() {
+		return
+	}
+	s.ActiveSkillName = name
+	s.ActiveSkillContent = content
+}
+
+// HasActiveSkill 判断当前会话是否已经激活了技能
+func (s *State) HasActiveSkill() bool {
+	if s == nil {
+		return false
+	}
+	return s.ActiveSkillName != ""
 }
 
 // AddReasoningStep 添加推理步骤

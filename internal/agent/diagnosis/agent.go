@@ -9,6 +9,7 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/store"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/summarizer"
@@ -28,6 +29,7 @@ func NewAgent(
 	reactLLM *llm.ReActLLM,
 	findingStore store.FindingStore,
 	toolCache store.ToolCacheStore,
+	skillLoader *skillpkg.Loader,
 	cfg *config.AgentConfig,
 ) *Agent {
 	// 1. 创建 OutputSummarizer
@@ -41,13 +43,13 @@ func NewAgent(
 
 	// 2. 创建各节点
 	infoNode := NewInfoNode(gw, cfg.MaxNamespaces)
-	decisionNode := NewDecisionNode(router)
+	decisionNode := NewDecisionNode(router, skillLoader)
 	actionNode := NewActionNode(gw, sa, reactLLM, sum, toolCache, cacheTTL)
 	compressNode := NewCompressNode(cfg.CompressThreshold, 3)
 	reportNode := NewReportNode(router, findingStore)
 
 	// 3. 创建 Graph（验证迭代逻辑内置于 Graph.Run 中）
-	graph := NewGraph(infoNode, decisionNode, actionNode, compressNode, reportNode, cfg.VerifyRecommendations, cfg.MaxVerifyIterations)
+	graph := NewGraph(infoNode, decisionNode, actionNode, compressNode, reportNode, skillLoader, cfg.VerifyRecommendations, cfg.MaxVerifyIterations)
 
 	// 4. 返回 Agent
 	return &Agent{

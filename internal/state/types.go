@@ -153,7 +153,7 @@ type ReasoningStep struct {
 	Iteration      int
 	Timestamp      time.Time
 	Thought        string
-	Decision       string // continue / deep_query / report
+	Decision       string // execute_plan / deep_query / report / use_skill (兼容旧 continue)
 	DeepQueryTopic string // deep_query 模式的调查主题
 	ToolCalls      []ToolCall
 	Observation    string

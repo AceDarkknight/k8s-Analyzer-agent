@@ -18,6 +18,7 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/store"
 )
@@ -178,11 +179,25 @@ func main() {
 	}
 	defer toolCache.Close()
 
-	// 11. 初始化 Main Agent
-	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, toolCache, &cfg.Agent)
+	// 11. 初始化 Skill Loader（可降级）
+	var skillLoader *skillpkg.Loader
+	if cfg.Skill.Enabled {
+		skillLoader, err = skillpkg.NewLoader(ctx, cfg.Skill.Dir)
+		if err != nil {
+			logger.Warn("Skill Loader 初始化失败，将按普通流程运行", logger.Err(err))
+			skillLoader = nil
+		} else {
+			logger.Info("Skill Loader 初始化完成", logger.String("dir", cfg.Skill.Dir))
+		}
+	} else {
+		logger.Info("Skill 中间件未开启")
+	}
+
+	// 12. 初始化 Main Agent
+	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, toolCache, skillLoader, &cfg.Agent)
 	logger.Info("Main Agent 初始化成功")
 
-	// 12. 执行诊断
+	// 13. 执行诊断
 	fmt.Printf("开始诊断: %s\n\n", userQuery)
 	result, err := agent.Run(ctx, userQuery)
 	if err != nil {
@@ -190,7 +205,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 13. 输出报告
+	// 14. 输出报告
 	if result != nil {
 		printReport(result)
 	} else {

@@ -19,6 +19,7 @@ type Config struct {
 	Store    StoreConfig    `yaml:"store"`
 	Agent    AgentConfig    `yaml:"agent"`
 	Log      LogConfig      `yaml:"log"`
+	Skill    SkillConfig    `yaml:"skill"`
 }
 
 // GatewayConfig 网关配置
@@ -91,6 +92,12 @@ type LogConfig struct {
 	FilePath   string `yaml:"file_path"`
 	MaxSizeMB  int    `yaml:"max_size_mb"`
 	MaxBackups int    `yaml:"max_backups"`
+}
+
+// SkillConfig Skill 中间件配置
+type SkillConfig struct {
+	Enabled bool   `yaml:"enabled"` // 是否启用技能中间件
+	Dir     string `yaml:"dir"`     // 技能目录，默认 ./skills
 }
 
 // envVarPattern 匹配 ${ENV_VAR} 或 ${ENV_VAR:-default} 格式的正则表达式
@@ -206,6 +213,10 @@ func (c *Config) setDefaults() {
 	if c.Agent.ToolCache.TTL == "" {
 		c.Agent.ToolCache.TTL = "10m"
 	}
+	// Skill middleware 默认配置
+	if c.Skill.Dir == "" {
+		c.Skill.Dir = "./skills"
+	}
 }
 
 // validate 校验必填字段
@@ -228,7 +239,7 @@ func (c *Config) validate() error {
 // String 返回配置的字符串表示（用于调试，隐藏敏感信息）
 func (c *Config) String() string {
 	return fmt.Sprintf(
-		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyIterations:%d}, Log:{Level:%s FilePath:%s}}",
+		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyIterations:%d}, Skill:{Enabled:%t Dir:%s}, Log:{Level:%s FilePath:%s}}",
 		c.Gateway.BaseURL,
 		c.Gateway.TimeoutSeconds,
 		c.ShellMCP.ServerURL,
@@ -245,6 +256,8 @@ func (c *Config) String() string {
 		c.Agent.FindingTTLHours,
 		c.Agent.VerifyRecommendations,
 		c.Agent.MaxVerifyIterations,
+		c.Skill.Enabled,
+		c.Skill.Dir,
 		c.Log.Level,
 		c.Log.FilePath,
 	)

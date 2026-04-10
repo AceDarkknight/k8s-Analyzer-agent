@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 )
 
@@ -21,18 +22,20 @@ type Graph struct {
 	actionNode          *ActionNode
 	compressNode        *CompressNode
 	reportNode          *ReportNode
+	skillLoader         *skillpkg.Loader
 	verifyEnabled       bool
 	maxVerifyIterations int
 }
 
 // NewGraph 创建 Graph
-func NewGraph(info *InfoNode, decision *DecisionNode, action *ActionNode, compress *CompressNode, report *ReportNode, verifyEnabled bool, maxVerifyIterations int) *Graph {
+func NewGraph(info *InfoNode, decision *DecisionNode, action *ActionNode, compress *CompressNode, report *ReportNode, skillLoader *skillpkg.Loader, verifyEnabled bool, maxVerifyIterations int) *Graph {
 	return &Graph{
 		infoNode:            info,
 		decisionNode:        decision,
 		actionNode:          action,
 		compressNode:        compress,
 		reportNode:          report,
+		skillLoader:         skillLoader,
 		verifyEnabled:       verifyEnabled,
 		maxVerifyIterations: maxVerifyIterations,
 	}
@@ -114,6 +117,22 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 				}
 			}
 			logger.Info("Graph: DecisionNode completed", logger.String("decision", decisionOutput.Decision))
+
+			if !state.VerifyPhase && !state.HasActiveSkill() && decisionOutput.Decision == "use_skill" {
+				skillName := decisionOutput.SkillName
+				if g.skillLoader != nil && skillName != "" {
+					content, loadErr := g.skillLoader.GetSkillContent(ctx, skillName)
+					if loadErr != nil {
+						logger.Warn("Graph: failed to load skill, fallback to normal path", logger.Err(loadErr), logger.String("skill_name", skillName))
+					} else {
+						state.ActivateSkill(skillName, content)
+						if lastStep := state.GetLastReasoningStep(); lastStep != nil {
+							lastStep.Observation = fmt.Sprintf("【系统报告】：已成功切换进[%s]技能诊断流水线。请在下一次输出时遵照新技能的指南开始进行逐步的计划执行。", skillName)
+						}
+						continue
+					}
+				}
+			}
 
 			// 如果是 execute_plan 模式，保存计划供后续轮次使用
 			if decisionOutput.Decision == "execute_plan" && len(decisionOutput.Plan) > 0 {
