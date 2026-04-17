@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -13,12 +14,25 @@ type RedisToolCache struct {
 	prefix string
 }
 
-// NewRedisToolCache 创建 Redis 工具缓存实例，复用已有的 redis.Client
-func NewRedisToolCache(client *redis.Client) *RedisToolCache {
+// NewRedisToolCache 创建 Redis 工具缓存实例
+func NewRedisToolCache(host string, port int, password string, db int) (*RedisToolCache, error) {
+	client := redis.NewClient(&redis.Options{
+		Addr:     fmt.Sprintf("%s:%d", host, port),
+		Password: password,
+		DB:       db,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := client.Ping(ctx).Err(); err != nil {
+		return nil, fmt.Errorf("failed to connect to redis for tool cache: %w", err)
+	}
+
 	return &RedisToolCache{
 		client: client,
 		prefix: "k8s-analyzer:tool-cache:",
-	}
+	}, nil
 }
 
 // Get 获取缓存

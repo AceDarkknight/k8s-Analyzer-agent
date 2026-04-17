@@ -155,24 +155,19 @@ func main() {
 	}
 	switch cfg.Agent.ToolCache.Backend {
 	case "redis":
-		if cfg.Store.Type == "redis" {
-			// 复用 FindingStore 的 Redis 连接配置
-			toolCache = store.NewRedisToolCache(nil) // 需要单独创建 redis client
-			logger.Info("ToolCache: Redis 后端（降级为内存）")
-			toolCache = store.NewMemoryToolCache(cacheTTL)
-		} else {
-			logger.Warn("ToolCache: Redis 后端配置但 Store 不是 Redis，降级为内存")
-			toolCache = store.NewMemoryToolCache(cacheTTL)
+		redisToolCache, cacheErr := store.NewRedisToolCache(cfg.Store.Redis.Host, cfg.Store.Redis.Port, cfg.Store.Redis.Password, cfg.Store.Redis.DB)
+		if cacheErr != nil {
+			logger.Fatal("ToolCache: Redis 后端初始化失败", logger.Err(cacheErr))
 		}
+		toolCache = redisToolCache
+		logger.Info("ToolCache: Redis 后端初始化成功")
 	case "file":
 		fileCache, fcErr := store.NewFileToolCache(cfg.Agent.ToolCache.FileDir)
 		if fcErr != nil {
-			logger.Warn("ToolCache: 文件后端初始化失败，降级为内存", logger.Err(fcErr))
-			toolCache = store.NewMemoryToolCache(cacheTTL)
-		} else {
-			toolCache = fileCache
-			logger.Info("ToolCache: 文件后端初始化成功", logger.String("dir", cfg.Agent.ToolCache.FileDir))
+			logger.Fatal("ToolCache: 文件后端初始化失败", logger.Err(fcErr))
 		}
+		toolCache = fileCache
+		logger.Info("ToolCache: 文件后端初始化成功", logger.String("dir", cfg.Agent.ToolCache.FileDir))
 	default:
 		toolCache = store.NewMemoryToolCache(cacheTTL)
 		logger.Info("ToolCache: 内存后端初始化成功")
