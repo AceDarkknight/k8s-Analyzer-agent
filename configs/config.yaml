@@ -53,6 +53,11 @@ agent:
     ttl: "10m"                  # 缓存过期时间
     file_dir: ""                # backend=file 时的缓存目录
 
+# 监控与 Trace 配置
+monitor:
+  api_port: 9090
+  trace_dir: "data/traces"
+
 # Skill 中间件配置
 skill:
   enabled: true

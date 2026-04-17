@@ -192,10 +192,14 @@ type BlockedCommand struct {
 // CommandExecution 命令执行记录
 type CommandExecution struct {
 	Command       string
+	ToolName      string
+	Args          map[string]interface{}
 	Success       bool
 	Output        string
+	DurationMs    int64
 	Timestamp     time.Time
 	IsVerifyPhase bool // 是否属于验证迭代阶段
+	Cached        bool
 }
 
 // PlanStep 诊断计划步骤

@@ -18,6 +18,7 @@ type Config struct {
 	LLM      AgentLLMConfig `yaml:"llm"`
 	Store    StoreConfig    `yaml:"store"`
 	Agent    AgentConfig    `yaml:"agent"`
+	Monitor  MonitorConfig  `yaml:"monitor"`
 	Log      LogConfig      `yaml:"log"`
 	Skill    SkillConfig    `yaml:"skill"`
 }
@@ -98,6 +99,12 @@ type LogConfig struct {
 type SkillConfig struct {
 	Enabled bool   `yaml:"enabled"` // 是否启用技能中间件
 	Dir     string `yaml:"dir"`     // 技能目录，默认 ./skills
+}
+
+// MonitorConfig 监控与 Trace 配置
+type MonitorConfig struct {
+	APIPort  int    `yaml:"api_port"`
+	TraceDir string `yaml:"trace_dir"`
 }
 
 // envVarPattern 匹配 ${ENV_VAR} 或 ${ENV_VAR:-default} 格式的正则表达式
@@ -217,6 +224,12 @@ func (c *Config) setDefaults() {
 	if c.Skill.Dir == "" {
 		c.Skill.Dir = "./skills"
 	}
+	if c.Monitor.APIPort == 0 {
+		c.Monitor.APIPort = 9090
+	}
+	if c.Monitor.TraceDir == "" {
+		c.Monitor.TraceDir = "data/traces"
+	}
 }
 
 // validate 校验必填字段
@@ -239,7 +252,7 @@ func (c *Config) validate() error {
 // String 返回配置的字符串表示（用于调试，隐藏敏感信息）
 func (c *Config) String() string {
 	return fmt.Sprintf(
-		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyIterations:%d}, Skill:{Enabled:%t Dir:%s}, Log:{Level:%s FilePath:%s}}",
+		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyIterations:%d}, Monitor:{APIPort:%d TraceDir:%s}, Skill:{Enabled:%t Dir:%s}, Log:{Level:%s FilePath:%s}}",
 		c.Gateway.BaseURL,
 		c.Gateway.TimeoutSeconds,
 		c.ShellMCP.ServerURL,
@@ -256,6 +269,8 @@ func (c *Config) String() string {
 		c.Agent.FindingTTLHours,
 		c.Agent.VerifyRecommendations,
 		c.Agent.MaxVerifyIterations,
+		c.Monitor.APIPort,
+		c.Monitor.TraceDir,
 		c.Skill.Enabled,
 		c.Skill.Dir,
 		c.Log.Level,

@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
@@ -14,6 +15,7 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // SafeCommandExecutor 安全命令执行接口（避免循环依赖）
@@ -26,6 +28,7 @@ type ReActLLM struct {
 	router       *LLMRouter
 	gateway      *gateway.GatewayClient
 	safeExecutor SafeCommandExecutor
+	recorder     *trc.TaskRecorder
 }
 
 // NewReActLLM 创建 ReAct LLM
@@ -35,6 +38,10 @@ func NewReActLLM(router *LLMRouter, gw *gateway.GatewayClient, safeExecutor Safe
 		gateway:      gw,
 		safeExecutor: safeExecutor,
 	}
+}
+
+func (r *ReActLLM) SetRecorder(recorder *trc.TaskRecorder) {
+	r.recorder = recorder
 }
 
 // listPodsInput list_pods 工具输入参数
@@ -51,10 +58,10 @@ type describePodInput struct {
 
 // getPodLogsInput get_pod_logs 工具输入参数
 type getPodLogsInput struct {
-	Namespace  string `json:"namespace" jsonschema:"description=Pod 所在命名空间，必填"`
-	Name       string `json:"name" jsonschema:"description=Pod 名称，必填"`
-	Container  string `json:"container" jsonschema:"description=容器名称，为空则使用默认容器"`
-	TailLines  int    `json:"tailLines" jsonschema:"description=返回的日志行数，默认 100，最大 200"`
+	Namespace string `json:"namespace" jsonschema:"description=Pod 所在命名空间，必填"`
+	Name      string `json:"name" jsonschema:"description=Pod 名称，必填"`
+	Container string `json:"container" jsonschema:"description=容器名称，为空则使用默认容器"`
+	TailLines int    `json:"tailLines" jsonschema:"description=返回的日志行数，默认 100，最大 200"`
 }
 
 // listEventsInput list_events 工具输入参数
@@ -217,25 +224,25 @@ func (r *ReActLLM) buildTools() ([]tool.InvokableTool, error) {
 }
 
 // DeepQuery 执行深度调查（用于 ActionNode 的 deep_query 模式）
-func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *state.State) (string, error) {
+func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *state.State) (string, *schema.TokenUsage, error) {
 	logger.Info("starting ReAct deep query", logger.String("topic", topic))
 
 	// 1. 获取 Power 模型
 	powerModel := r.router.Power()
 	if powerModel == nil {
-		return "", fmt.Errorf("power model not initialized")
+		return "", nil, fmt.Errorf("power model not initialized")
 	}
 
 	// 尝试将模型转换为 ToolCallingChatModel
 	toolCallingModel, ok := powerModel.(model.ToolCallingChatModel)
 	if !ok {
-		return "", fmt.Errorf("power model does not support tool calling")
+		return "", nil, fmt.Errorf("power model does not support tool calling")
 	}
 
 	// 2. 构建工具列表
 	tools, err := r.buildTools()
 	if err != nil {
-		return "", fmt.Errorf("failed to build tools: %w", err)
+		return "", nil, fmt.Errorf("failed to build tools: %w", err)
 	}
 
 	// 转换工具为 BaseTool 接口
@@ -253,7 +260,7 @@ func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *st
 		MaxStep: 10,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to create ReAct agent: %w", err)
+		return "", nil, fmt.Errorf("failed to create ReAct agent: %w", err)
 	}
 
 	// 4. 构建系统提示词 + 用户查询
@@ -273,15 +280,45 @@ func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *st
 
 	// 5. 调用 agent 执行
 	logger.Info("calling ReAct agent")
-	response, err := agent.Generate(ctx, []*schema.Message{systemMsg, userMsg})
+	option, future := react.WithMessageFuture()
+	var wg sync.WaitGroup
+	totalUsage := &schema.TokenUsage{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		iter := future.GetMessages()
+		for {
+			msg, ok, iterErr := iter.Next()
+			if iterErr != nil || !ok {
+				return
+			}
+			if msg == nil || msg.Role != schema.Assistant || msg.ResponseMeta == nil || msg.ResponseMeta.Usage == nil {
+				continue
+			}
+			usage := msg.ResponseMeta.Usage
+			totalUsage.PromptTokens += usage.PromptTokens
+			totalUsage.CompletionTokens += usage.CompletionTokens
+			totalUsage.TotalTokens += usage.TotalTokens
+			if r.recorder != nil {
+				r.recorder.Emit(trc.LLMTokenUsedEvent{
+					Source:           "deep_query",
+					PromptTokens:     usage.PromptTokens,
+					CompletionTokens: usage.CompletionTokens,
+					TotalTokens:      usage.TotalTokens,
+				})
+			}
+		}
+	}()
+	response, err := agent.Generate(ctx, []*schema.Message{systemMsg, userMsg}, option)
+	wg.Wait()
 	if err != nil {
-		return "", fmt.Errorf("ReAct agent execution failed: %w", err)
+		return "", totalUsage, fmt.Errorf("ReAct agent execution failed: %w", err)
 	}
 
 	if response == nil {
-		return "", fmt.Errorf("ReAct agent returned nil response")
+		return "", totalUsage, fmt.Errorf("ReAct agent returned nil response")
 	}
 
 	logger.Info("ReAct deep query completed")
-	return response.Content, nil
+	return response.Content, totalUsage, nil
 }

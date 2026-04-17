@@ -3,6 +3,7 @@ package diagnosis
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/schema"
 
@@ -10,12 +11,14 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // DecisionNode 决策节点
 type DecisionNode struct {
 	router      *llm.LLMRouter
 	skillLoader *skillpkg.Loader
+	recorder    *trc.TaskRecorder
 }
 
 // DecisionOutput 决策输出
@@ -30,10 +33,11 @@ type DecisionOutput struct {
 }
 
 // NewDecisionNode 创建新的决策节点
-func NewDecisionNode(router *llm.LLMRouter, skillLoader *skillpkg.Loader) *DecisionNode {
+func NewDecisionNode(router *llm.LLMRouter, skillLoader *skillpkg.Loader, recorder *trc.TaskRecorder) *DecisionNode {
 	return &DecisionNode{
 		router:      router,
 		skillLoader: skillLoader,
+		recorder:    recorder,
 	}
 }
 
@@ -117,10 +121,13 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 		schema.UserMessage(prompt),
 	}
 
-	response, err := n.router.GenerateWithLight(ctx, messages)
+	response, usage, err := n.router.GenerateWithLight(ctx, messages)
 	if err != nil {
 		logger.Error("DecisionNode: LLM generation failed", logger.Err(err))
 		return n.fallbackDecision(s), nil
+	}
+	if usage != nil {
+		s.AccumulateTokenUsage(usage)
 	}
 
 	if response == nil || response.Content == "" {
@@ -153,12 +160,22 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 	// 7. 添加 ReasoningStep 到 state
 	step := state.ReasoningStep{
 		Iteration:      s.GetIterationCount(),
+		Timestamp:      time.Now(),
 		Thought:        result.Thought,
 		Decision:       result.Decision,
 		DeepQueryTopic: result.DeepQueryTopic,
 		ToolCalls:      toolCalls,
 	}
+	if usage != nil {
+		step.TokensUsed = usage.TotalTokens
+	}
 	s.AddReasoningStep(step)
+	if n.recorder != nil {
+		n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: step})
+		if usage != nil {
+			n.recorder.Emit(trc.LLMTokenUsedEvent{Source: "decision", PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens})
+		}
+	}
 
 	logger.Info("DecisionNode: decision made",
 		logger.String("decision", result.Decision),

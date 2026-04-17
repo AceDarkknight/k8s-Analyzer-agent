@@ -179,6 +179,14 @@ func main() {
 	}
 	defer toolCache.Close()
 
+	// 10.8 初始化 TraceStore
+	traceStore, err := store.NewFileTraceStore(cfg.Monitor.TraceDir)
+	if err != nil {
+		logger.Fatal("TraceStore 初始化失败", logger.Err(err))
+	}
+	defer traceStore.Close()
+	logger.Info("TraceStore 初始化成功", logger.String("dir", cfg.Monitor.TraceDir))
+
 	// 11. 初始化 Skill Loader（可降级）
 	var skillLoader *skillpkg.Loader
 	if cfg.Skill.Enabled {
@@ -194,7 +202,7 @@ func main() {
 	}
 
 	// 12. 初始化 Main Agent
-	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, toolCache, skillLoader, &cfg.Agent)
+	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, toolCache, skillLoader, traceStore, &cfg.Agent)
 	logger.Info("Main Agent 初始化成功")
 
 	// 13. 执行诊断

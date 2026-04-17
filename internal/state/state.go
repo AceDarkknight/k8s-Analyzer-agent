@@ -3,6 +3,8 @@ package state
 import (
 	"sync"
 	"time"
+
+	"github.com/cloudwego/eino/schema"
 )
 
 // State Graph 流转状态
@@ -29,8 +31,11 @@ type State struct {
 	// 缓存命中统计（按轮次）
 	CacheStats map[int]*RoundCacheStats
 	// Skill support
-	ActiveSkillName    string
-	ActiveSkillContent string
+	ActiveSkillName       string
+	ActiveSkillContent    string
+	TotalPromptTokens     int
+	TotalCompletionTokens int
+	TotalTokens           int
 }
 
 // NewState 创建新的 State
@@ -97,15 +102,25 @@ func (s *State) AddCommandExecution(command string, success bool, output string,
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	exec := CommandExecution{
+	s.AddCommandExecutionRecord(CommandExecution{
 		Command:       command,
 		Success:       success,
 		Output:        output,
 		Timestamp:     time.Now(),
 		IsVerifyPhase: isVerifyPhase,
+	})
+}
+
+// AddCommandExecutionRecord 记录完整命令执行信息
+func (s *State) AddCommandExecutionRecord(exec CommandExecution) {
+	if s == nil {
+		return
 	}
+	if exec.Timestamp.IsZero() {
+		exec.Timestamp = time.Now()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.CommandExecutions = append(s.CommandExecutions, exec)
 }
 
@@ -376,6 +391,18 @@ func (s *State) RecordCacheMiss(iteration int) {
 	defer s.mu.Unlock()
 	stats := s.getOrCreateCacheStats(iteration)
 	stats.TotalCalls++
+}
+
+// AccumulateTokenUsage 累加 LLM token 使用量
+func (s *State) AccumulateTokenUsage(usage *schema.TokenUsage) {
+	if s == nil || usage == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TotalPromptTokens += usage.PromptTokens
+	s.TotalCompletionTokens += usage.CompletionTokens
+	s.TotalTokens += usage.TotalTokens
 }
 
 // GetRoundCacheStats 获取指定轮次的缓存统计

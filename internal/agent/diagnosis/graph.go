@@ -7,6 +7,7 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // ToolCall 是 state.ToolCall 的别名，用于本地使用
@@ -25,10 +26,11 @@ type Graph struct {
 	skillLoader         *skillpkg.Loader
 	verifyEnabled       bool
 	maxVerifyIterations int
+	recorder            *trc.TaskRecorder
 }
 
 // NewGraph 创建 Graph
-func NewGraph(info *InfoNode, decision *DecisionNode, action *ActionNode, compress *CompressNode, report *ReportNode, skillLoader *skillpkg.Loader, verifyEnabled bool, maxVerifyIterations int) *Graph {
+func NewGraph(info *InfoNode, decision *DecisionNode, action *ActionNode, compress *CompressNode, report *ReportNode, skillLoader *skillpkg.Loader, verifyEnabled bool, maxVerifyIterations int, recorder *trc.TaskRecorder) *Graph {
 	return &Graph{
 		infoNode:            info,
 		decisionNode:        decision,
@@ -38,7 +40,15 @@ func NewGraph(info *InfoNode, decision *DecisionNode, action *ActionNode, compre
 		skillLoader:         skillLoader,
 		verifyEnabled:       verifyEnabled,
 		maxVerifyIterations: maxVerifyIterations,
+		recorder:            recorder,
 	}
+}
+
+func (g *Graph) Recorder() *trc.TaskRecorder {
+	if g == nil {
+		return nil
+	}
+	return g.recorder
 }
 
 // Run 执行诊断流程

@@ -12,19 +12,22 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/store"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // ReportNode 报告节点
 type ReportNode struct {
-	router *llm.LLMRouter
-	store  store.FindingStore
+	router   *llm.LLMRouter
+	store    store.FindingStore
+	recorder *trc.TaskRecorder
 }
 
 // NewReportNode 创建新的报告节点
-func NewReportNode(router *llm.LLMRouter, store store.FindingStore) *ReportNode {
+func NewReportNode(router *llm.LLMRouter, store store.FindingStore, recorder *trc.TaskRecorder) *ReportNode {
 	return &ReportNode{
-		router: router,
-		store:  store,
+		router:   router,
+		store:    store,
+		recorder: recorder,
 	}
 }
 
@@ -50,11 +53,17 @@ func (n *ReportNode) Execute(ctx context.Context, s *state.State) (*state.State,
 		schema.UserMessage(prompt),
 	}
 
-	response, err := n.router.GenerateWithPower(ctx, messages)
+	response, usage, err := n.router.GenerateWithPower(ctx, messages)
 	if err != nil {
 		logger.Error("ReportNode: LLM generation failed", logger.Err(err))
 		n.generateFallbackReport(s)
 		return s, nil
+	}
+	if usage != nil {
+		s.AccumulateTokenUsage(usage)
+		if n.recorder != nil {
+			n.recorder.Emit(trc.LLMTokenUsedEvent{Source: "report", PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens})
+		}
 	}
 
 	if response == nil || response.Content == "" {

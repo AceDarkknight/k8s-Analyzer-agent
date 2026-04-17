@@ -13,9 +13,11 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/metrics"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/store"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/summarizer"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // ActionNode 执行节点
@@ -26,6 +28,7 @@ type ActionNode struct {
 	summarizer *summarizer.OutputSummarizer
 	toolCache  store.ToolCacheStore
 	cacheTTL   time.Duration
+	recorder   *trc.TaskRecorder
 }
 
 // toolMapping 工具名到 Gateway 请求映射
@@ -54,6 +57,7 @@ func NewActionNode(
 	sum *summarizer.OutputSummarizer,
 	toolCache store.ToolCacheStore,
 	cacheTTL time.Duration,
+	recorder *trc.TaskRecorder,
 ) *ActionNode {
 	if cacheTTL <= 0 {
 		cacheTTL = 10 * time.Minute
@@ -65,6 +69,7 @@ func NewActionNode(
 		summarizer: sum,
 		toolCache:  toolCache,
 		cacheTTL:   cacheTTL,
+		recorder:   recorder,
 	}
 }
 
@@ -130,6 +135,9 @@ func (n *ActionNode) executeContinue(ctx context.Context, s *state.State, decisi
 	lastStep := s.GetLastReasoningStep()
 	if lastStep != nil {
 		lastStep.Observation = mergedObservation
+		if n.recorder != nil {
+			n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: *lastStep})
+		}
 	}
 
 	logger.Info("ActionNode: continue mode completed",
@@ -192,6 +200,9 @@ func (n *ActionNode) executePlan(ctx context.Context, s *state.State, decision *
 	lastStep := s.GetLastReasoningStep()
 	if lastStep != nil {
 		lastStep.Observation = mergedObservation
+		if n.recorder != nil {
+			n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: *lastStep})
+		}
 	}
 
 	logger.Info("ActionNode: execute_plan mode completed",
@@ -204,6 +215,7 @@ func (n *ActionNode) executePlan(ctx context.Context, s *state.State, decision *
 func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc state.ToolCall) (string, error) {
 	logger.Info("ActionNode: executing tool call",
 		logger.String("tool", tc.Name))
+	startTime := time.Now()
 
 	// execute_safe_command 不缓存（有副作用）
 	if tc.Name == "execute_safe_command" {
@@ -219,7 +231,12 @@ func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc sta
 			s.RecordCacheHit(s.GetIterationCount())
 			// 缓存命中也记录执行（确保报告生成不受影响）
 			cmdStr := buildCmdStr(tc)
-			s.AddCommandExecution(cmdStr, true, cached, s.VerifyPhase)
+			execRecord := state.CommandExecution{Command: cmdStr, ToolName: tc.Name, Args: tc.Args, Success: true, Output: cached, DurationMs: time.Since(startTime).Milliseconds(), Timestamp: time.Now(), IsVerifyPhase: s.VerifyPhase, Cached: true}
+			s.AddCommandExecutionRecord(execRecord)
+			if n.recorder != nil {
+				n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: true, Output: cached, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: true, Command: cmdStr}})
+			}
+			metrics.RecordToolCall(tc.Name, true)
 			return cached, nil
 		}
 	}
@@ -285,7 +302,12 @@ func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc sta
 
 	// 记录命令执行（构建命令字符串用于显示）
 	cmdStr := buildCmdStr(tc)
-	s.AddCommandExecution(cmdStr, resp.Status == "success", summary, s.VerifyPhase)
+	execRecord := state.CommandExecution{Command: cmdStr, ToolName: tc.Name, Args: tc.Args, Success: resp.Status == "success", Output: summary, DurationMs: time.Since(startTime).Milliseconds(), Timestamp: time.Now(), IsVerifyPhase: s.VerifyPhase, Cached: false}
+	s.AddCommandExecutionRecord(execRecord)
+	if n.recorder != nil {
+		n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: execRecord.Success, Output: summary, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: false, Command: cmdStr}})
+	}
+	metrics.RecordToolCall(tc.Name, execRecord.Success)
 
 	// 写入缓存
 	if n.toolCache != nil {
@@ -303,6 +325,8 @@ func (n *ActionNode) executeSafeCommand(ctx context.Context, s *state.State, tc 
 	if command == "" {
 		return "", fmt.Errorf("command is empty")
 	}
+
+	startTime := time.Now()
 
 	req := &safety.CommandRequest{
 		Command:   command,
@@ -325,21 +349,28 @@ func (n *ActionNode) executeSafeCommand(ctx context.Context, s *state.State, tc 
 			Advice:  result.AuditInfo.Advice,
 		}
 		s.AddBlockedCommand(blockedCmd)
+		if n.recorder != nil {
+			n.recorder.Emit(trc.BlockedCommandEvent{Command: blockedCmd})
+		}
 
 		return fmt.Sprintf("命令被安全审计拒绝。原因: %s。建议: %s",
 			result.AuditInfo.Reason, result.AuditInfo.Advice), nil
 	}
-
-	// 记录命令执行
-	s.AddCommandExecution(command, result.ExitCode == 0, result.Stdout, s.VerifyPhase)
 
 	// 摘要输出
 	output := result.Stdout
 	if output == "" {
 		output = result.Stderr
 	}
+	summary := n.summarizer.Summarize(output)
+	execRecord := state.CommandExecution{Command: command, ToolName: tc.Name, Args: tc.Args, Success: result.ExitCode == 0, Output: summary, DurationMs: time.Since(startTime).Milliseconds(), Timestamp: time.Now(), IsVerifyPhase: s.VerifyPhase, Cached: false}
+	s.AddCommandExecutionRecord(execRecord)
+	if n.recorder != nil {
+		n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: execRecord.Success, Output: summary, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: false, Command: command}})
+	}
+	metrics.RecordToolCall(tc.Name, execRecord.Success)
 
-	return n.summarizer.Summarize(output), nil
+	return summary, nil
 }
 
 // executeDeepQuery 执行 deep_query 模式
@@ -353,16 +384,25 @@ func (n *ActionNode) executeDeepQuery(ctx context.Context, s *state.State, decis
 		logger.String("topic", decision.DeepQueryTopic))
 
 	// 调用 ReAct LLM 进行深度调查
-	result, err := n.reactLLM.DeepQuery(ctx, decision.DeepQueryTopic, s)
+	result, usage, err := n.reactLLM.DeepQuery(ctx, decision.DeepQueryTopic, s)
 	if err != nil {
 		logger.Error("ActionNode: deep query failed", logger.Err(err))
 		result = fmt.Sprintf("深度调查执行失败: %v", err)
+	}
+	if usage != nil {
+		s.AccumulateTokenUsage(usage)
 	}
 
 	// 更新最后一个 ReasoningStep 的 Observation
 	lastStep := s.GetLastReasoningStep()
 	if lastStep != nil {
 		lastStep.Observation = result
+		if usage != nil {
+			lastStep.TokensUsed += usage.TotalTokens
+		}
+		if n.recorder != nil {
+			n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: *lastStep})
+		}
 	}
 
 	logger.Info("ActionNode: deep query completed")
