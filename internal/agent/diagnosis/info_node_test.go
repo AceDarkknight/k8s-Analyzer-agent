@@ -190,3 +190,83 @@ func TestParseDeployments(t *testing.T) {
 		t.Errorf("expected availableReplicas 2, got %d", dep.AvailableReplicas)
 	}
 }
+
+func TestCalcNamespaceLimit(t *testing.T) {
+	tests := []struct {
+		name          string
+		maxNamespaces int
+		total         int
+		expected      int
+	}{
+		{"config override", 20, 100, 20},
+		{"total<=8 all scan", 0, 5, 5},
+		{"total=8 boundary", 0, 8, 8},
+		{"total=9 use 10", 0, 9, 10},
+		{"total=15", 0, 15, 10},
+		{"total=20 boundary", 0, 20, 10},
+		{"total=21 use 15", 0, 21, 15},
+		{"total=100", 0, 100, 15},
+		{"total=0", 0, 0, 0},
+		{"total=1", 0, 1, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := NewInfoNode(nil, tt.maxNamespaces)
+			result := node.calcNamespaceLimit(tt.total)
+			if result != tt.expected {
+				t.Errorf("calcNamespaceLimit(%d) = %d, want %d", tt.total, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPrioritizeNamespaces(t *testing.T) {
+	node := NewInfoNode(nil, 0)
+
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "mixed namespaces",
+			input:    []string{"kube-system", "default", "production", "kube-public", "staging"},
+			expected: []string{"production", "staging", "default", "kube-system", "kube-public"},
+		},
+		{
+			name:     "only system",
+			input:    []string{"kube-system", "kube-public"},
+			expected: []string{"kube-system", "kube-public"},
+		},
+		{
+			name:     "only business",
+			input:    []string{"app1", "app2"},
+			expected: []string{"app1", "app2"},
+		},
+		{
+			name:     "only default",
+			input:    []string{"default"},
+			expected: []string{"default"},
+		},
+		{
+			name:     "empty",
+			input:    []string{},
+			expected: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := node.prioritizeNamespaces(tt.input)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("length mismatch: got %d, want %d", len(result), len(tt.expected))
+			}
+			for i, ns := range result {
+				if ns != tt.expected[i] {
+					t.Errorf("index %d: got %q, want %q", i, ns, tt.expected[i])
+				}
+			}
+		})
+	}
+}

@@ -47,6 +47,21 @@ agent:
   finding_ttl_hours: 1
   verify_recommendations: true  # 是否启用验证迭代
   max_verify_iterations: 2      # 验证阶段最大迭代数
+  max_namespaces: 0             # 0=动态计算，>0=固定上限
+  tool_cache:
+    backend: "memory"           # 可选 "memory" | "redis" | "file"
+    ttl: "10m"                  # 缓存过期时间
+    file_dir: ""                # backend=file 时的缓存目录
+
+# 监控与 Trace 配置
+monitor:
+  api_port: 9090
+  trace_dir: "data/traces"
+
+# Skill 中间件配置
+skill:
+  enabled: true
+  dir: "./skills"
 
 # 日志配置
 log:

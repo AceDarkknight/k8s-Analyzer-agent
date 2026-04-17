@@ -12,7 +12,8 @@ import (
 // DecisionResult 决策节点 LLM 响应
 type DecisionResult struct {
 	Thought        string           `json:"thought"`
-	Decision       string           `json:"decision"`   // execute_plan / deep_query / report
+	Decision       string           `json:"decision"` // execute_plan / deep_query / report / use_skill
+	SkillName      string           `json:"skill_name"`
 	ToolCalls      []state.ToolCall `json:"tool_calls"` // 兼容旧模式
 	Plan           []state.PlanStep `json:"plan"`       // 新模式
 	ExecuteSteps   []int            `json:"execute_steps"`
@@ -75,6 +76,7 @@ func ParseDecisionResponse(content string) (*DecisionResult, error) {
 		"execute_plan": true, // 新模式
 		"deep_query":   true,
 		"report":       true,
+		"use_skill":    true,
 	}
 	if !validDecisions[result.Decision] {
 		// 尝试降级处理
@@ -107,6 +109,8 @@ func parseDecisionResponseFallback(content string) (*DecisionResult, error) {
 	if strings.Contains(contentLower, "decision") {
 		if strings.Contains(contentLower, "report") {
 			result.Decision = "report"
+		} else if strings.Contains(contentLower, "use_skill") || strings.Contains(contentLower, "use skill") {
+			result.Decision = "use_skill"
 		} else if strings.Contains(contentLower, "deep_query") || strings.Contains(contentLower, "deep query") {
 			result.Decision = "deep_query"
 		}

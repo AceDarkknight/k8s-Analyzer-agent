@@ -2,16 +2,22 @@ package diagnosis
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/metrics"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/store"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/summarizer"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // ActionNode 执行节点
@@ -20,6 +26,9 @@ type ActionNode struct {
 	safety     *safety.SafetyAgent
 	reactLLM   *llm.ReActLLM
 	summarizer *summarizer.OutputSummarizer
+	toolCache  store.ToolCacheStore
+	cacheTTL   time.Duration
+	recorder   *trc.TaskRecorder
 }
 
 // toolMapping 工具名到 Gateway 请求映射
@@ -46,12 +55,21 @@ func NewActionNode(
 	sa *safety.SafetyAgent,
 	react *llm.ReActLLM,
 	sum *summarizer.OutputSummarizer,
+	toolCache store.ToolCacheStore,
+	cacheTTL time.Duration,
+	recorder *trc.TaskRecorder,
 ) *ActionNode {
+	if cacheTTL <= 0 {
+		cacheTTL = 10 * time.Minute
+	}
 	return &ActionNode{
 		gateway:    gw,
 		safety:     sa,
 		reactLLM:   react,
 		summarizer: sum,
+		toolCache:  toolCache,
+		cacheTTL:   cacheTTL,
+		recorder:   recorder,
 	}
 }
 
@@ -117,6 +135,9 @@ func (n *ActionNode) executeContinue(ctx context.Context, s *state.State, decisi
 	lastStep := s.GetLastReasoningStep()
 	if lastStep != nil {
 		lastStep.Observation = mergedObservation
+		if n.recorder != nil {
+			n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: *lastStep})
+		}
 	}
 
 	logger.Info("ActionNode: continue mode completed",
@@ -179,6 +200,9 @@ func (n *ActionNode) executePlan(ctx context.Context, s *state.State, decision *
 	lastStep := s.GetLastReasoningStep()
 	if lastStep != nil {
 		lastStep.Observation = mergedObservation
+		if n.recorder != nil {
+			n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: *lastStep})
+		}
 	}
 
 	logger.Info("ActionNode: execute_plan mode completed",
@@ -191,11 +215,32 @@ func (n *ActionNode) executePlan(ctx context.Context, s *state.State, decision *
 func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc state.ToolCall) (string, error) {
 	logger.Info("ActionNode: executing tool call",
 		logger.String("tool", tc.Name))
+	startTime := time.Now()
 
-	// 处理 execute_safe_command 特殊工具
+	// execute_safe_command 不缓存（有副作用）
 	if tc.Name == "execute_safe_command" {
 		return n.executeSafeCommand(ctx, s, tc)
 	}
+
+	// 检查缓存
+	cacheKey := buildCacheKey(tc)
+	if n.toolCache != nil {
+		if cached, ok, _ := n.toolCache.Get(ctx, cacheKey); ok {
+			logger.Info("ActionNode: cache hit, skipping gateway call",
+				logger.String("tool", tc.Name))
+			s.RecordCacheHit(s.GetIterationCount())
+			// 缓存命中也记录执行（确保报告生成不受影响）
+			cmdStr := buildCmdStr(tc)
+			execRecord := state.CommandExecution{Command: cmdStr, ToolName: tc.Name, Args: tc.Args, Success: true, Output: cached, DurationMs: time.Since(startTime).Milliseconds(), Timestamp: time.Now(), IsVerifyPhase: s.VerifyPhase, Cached: true}
+			s.AddCommandExecutionRecord(execRecord)
+			if n.recorder != nil {
+				n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: true, Output: cached, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: true, Command: cmdStr}})
+			}
+			metrics.RecordToolCall(tc.Name, true)
+			return cached, nil
+		}
+	}
+	s.RecordCacheMiss(s.GetIterationCount())
 
 	// 查找工具映射
 	mapping, ok := toolMapping[tc.Name]
@@ -256,14 +301,18 @@ func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc sta
 	summary := n.summarizer.Summarize(output)
 
 	// 记录命令执行（构建命令字符串用于显示）
-	cmdStr := fmt.Sprintf("kubectl %s %s", mapping.Verb, mapping.Resource)
-	if req.Namespace != "" {
-		cmdStr = fmt.Sprintf("kubectl -n %s %s %s", req.Namespace, mapping.Verb, mapping.Resource)
+	cmdStr := buildCmdStr(tc)
+	execRecord := state.CommandExecution{Command: cmdStr, ToolName: tc.Name, Args: tc.Args, Success: resp.Status == "success", Output: summary, DurationMs: time.Since(startTime).Milliseconds(), Timestamp: time.Now(), IsVerifyPhase: s.VerifyPhase, Cached: false}
+	s.AddCommandExecutionRecord(execRecord)
+	if n.recorder != nil {
+		n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: execRecord.Success, Output: summary, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: false, Command: cmdStr}})
 	}
-	if req.Name != "" {
-		cmdStr += " " + req.Name
+	metrics.RecordToolCall(tc.Name, execRecord.Success)
+
+	// 写入缓存
+	if n.toolCache != nil {
+		_ = n.toolCache.Set(ctx, cacheKey, summary, n.cacheTTL)
 	}
-	s.AddCommandExecution(cmdStr, resp.Status == "success", summary, s.VerifyPhase)
 
 	return summary, nil
 }
@@ -276,6 +325,8 @@ func (n *ActionNode) executeSafeCommand(ctx context.Context, s *state.State, tc 
 	if command == "" {
 		return "", fmt.Errorf("command is empty")
 	}
+
+	startTime := time.Now()
 
 	req := &safety.CommandRequest{
 		Command:   command,
@@ -298,21 +349,28 @@ func (n *ActionNode) executeSafeCommand(ctx context.Context, s *state.State, tc 
 			Advice:  result.AuditInfo.Advice,
 		}
 		s.AddBlockedCommand(blockedCmd)
+		if n.recorder != nil {
+			n.recorder.Emit(trc.BlockedCommandEvent{Command: blockedCmd})
+		}
 
 		return fmt.Sprintf("命令被安全审计拒绝。原因: %s。建议: %s",
 			result.AuditInfo.Reason, result.AuditInfo.Advice), nil
 	}
-
-	// 记录命令执行
-	s.AddCommandExecution(command, result.ExitCode == 0, result.Stdout, s.VerifyPhase)
 
 	// 摘要输出
 	output := result.Stdout
 	if output == "" {
 		output = result.Stderr
 	}
+	summary := n.summarizer.Summarize(output)
+	execRecord := state.CommandExecution{Command: command, ToolName: tc.Name, Args: tc.Args, Success: result.ExitCode == 0, Output: summary, DurationMs: time.Since(startTime).Milliseconds(), Timestamp: time.Now(), IsVerifyPhase: s.VerifyPhase, Cached: false}
+	s.AddCommandExecutionRecord(execRecord)
+	if n.recorder != nil {
+		n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: execRecord.Success, Output: summary, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: false, Command: command}})
+	}
+	metrics.RecordToolCall(tc.Name, execRecord.Success)
 
-	return n.summarizer.Summarize(output), nil
+	return summary, nil
 }
 
 // executeDeepQuery 执行 deep_query 模式
@@ -326,19 +384,68 @@ func (n *ActionNode) executeDeepQuery(ctx context.Context, s *state.State, decis
 		logger.String("topic", decision.DeepQueryTopic))
 
 	// 调用 ReAct LLM 进行深度调查
-	result, err := n.reactLLM.DeepQuery(ctx, decision.DeepQueryTopic, s)
+	result, usage, err := n.reactLLM.DeepQuery(ctx, decision.DeepQueryTopic, s)
 	if err != nil {
 		logger.Error("ActionNode: deep query failed", logger.Err(err))
 		result = fmt.Sprintf("深度调查执行失败: %v", err)
+	}
+	if usage != nil {
+		s.AccumulateTokenUsage(usage)
 	}
 
 	// 更新最后一个 ReasoningStep 的 Observation
 	lastStep := s.GetLastReasoningStep()
 	if lastStep != nil {
 		lastStep.Observation = result
+		if usage != nil {
+			lastStep.TokensUsed += usage.TotalTokens
+		}
+		if n.recorder != nil {
+			n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: *lastStep})
+		}
 	}
 
 	logger.Info("ActionNode: deep query completed")
 
 	return s, nil
+}
+
+// buildCacheKey 构建工具调用的缓存 key
+func buildCacheKey(tc state.ToolCall) string {
+	// 对 args 进行排序序列化确保一致性
+	argsBytes, _ := json.Marshal(sortedArgs(tc.Args))
+	return tc.Name + ":" + string(argsBytes)
+}
+
+// sortedArgs 返回排序后的 args map
+func sortedArgs(args map[string]interface{}) map[string]interface{} {
+	if len(args) == 0 {
+		return args
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	sorted := make(map[string]interface{}, len(args))
+	for _, k := range keys {
+		sorted[k] = args[k]
+	}
+	return sorted
+}
+
+// buildCmdStr 构建用于显示的命令字符串
+func buildCmdStr(tc state.ToolCall) string {
+	mapping, ok := toolMapping[tc.Name]
+	if !ok {
+		return tc.Name
+	}
+	cmdStr := fmt.Sprintf("kubectl %s %s", mapping.Verb, mapping.Resource)
+	if ns, ok := tc.Args["namespace"].(string); ok && ns != "" {
+		cmdStr = fmt.Sprintf("kubectl -n %s %s %s", ns, mapping.Verb, mapping.Resource)
+	}
+	if name, ok := tc.Args["name"].(string); ok && name != "" {
+		cmdStr += " " + name
+	}
+	return cmdStr
 }

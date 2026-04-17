@@ -5,7 +5,9 @@ import (
 	"fmt"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // ToolCall 是 state.ToolCall 的别名，用于本地使用
@@ -21,21 +23,32 @@ type Graph struct {
 	actionNode          *ActionNode
 	compressNode        *CompressNode
 	reportNode          *ReportNode
+	skillLoader         *skillpkg.Loader
 	verifyEnabled       bool
 	maxVerifyIterations int
+	recorder            *trc.TaskRecorder
 }
 
 // NewGraph 创建 Graph
-func NewGraph(info *InfoNode, decision *DecisionNode, action *ActionNode, compress *CompressNode, report *ReportNode, verifyEnabled bool, maxVerifyIterations int) *Graph {
+func NewGraph(info *InfoNode, decision *DecisionNode, action *ActionNode, compress *CompressNode, report *ReportNode, skillLoader *skillpkg.Loader, verifyEnabled bool, maxVerifyIterations int, recorder *trc.TaskRecorder) *Graph {
 	return &Graph{
 		infoNode:            info,
 		decisionNode:        decision,
 		actionNode:          action,
 		compressNode:        compress,
 		reportNode:          report,
+		skillLoader:         skillLoader,
 		verifyEnabled:       verifyEnabled,
 		maxVerifyIterations: maxVerifyIterations,
+		recorder:            recorder,
 	}
+}
+
+func (g *Graph) Recorder() *trc.TaskRecorder {
+	if g == nil {
+		return nil
+	}
+	return g.recorder
 }
 
 // Run 执行诊断流程
@@ -115,6 +128,22 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 			}
 			logger.Info("Graph: DecisionNode completed", logger.String("decision", decisionOutput.Decision))
 
+			if !state.VerifyPhase && !state.HasActiveSkill() && decisionOutput.Decision == "use_skill" {
+				skillName := decisionOutput.SkillName
+				if g.skillLoader != nil && skillName != "" {
+					content, loadErr := g.skillLoader.GetSkillContent(ctx, skillName)
+					if loadErr != nil {
+						logger.Warn("Graph: failed to load skill, fallback to normal path", logger.Err(loadErr), logger.String("skill_name", skillName))
+					} else {
+						state.ActivateSkill(skillName, content)
+						if lastStep := state.GetLastReasoningStep(); lastStep != nil {
+							lastStep.Observation = fmt.Sprintf("【系统报告】：已成功切换进[%s]技能诊断流水线。请在下一次输出时遵照新技能的指南开始进行逐步的计划执行。", skillName)
+						}
+						continue
+					}
+				}
+			}
+
 			// 如果是 execute_plan 模式，保存计划供后续轮次使用
 			if decisionOutput.Decision == "execute_plan" && len(decisionOutput.Plan) > 0 {
 				currentPlan = decisionOutput.Plan
@@ -174,53 +203,65 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 	logger.Info("Graph: ReportNode completed")
 
 	// 4. 验证阶段：检查是否需要进入验证迭代
+	//    跳过条件：所有 Recommendations 都没有 Command（纯建议型，无法验证）
 	if g.verifyEnabled && state.AnalysisResult != nil && len(state.AnalysisResult.Recommendations) > 0 && !state.VerifyPhase {
-		logger.Info("Graph: entering verify phase")
-		state.EnterVerifyPhase(g.maxVerifyIterations)
-
-		// 验证迭代循环
-		for {
-			// a. DecisionNode（验证模式）
-			logger.Info("Graph: executing DecisionNode (verify phase)")
-			decisionOutput, err := g.decisionNode.Execute(ctx, state)
-			if err != nil {
-				logger.Error("Graph: DecisionNode (verify) failed", logger.Err(err))
+		hasVerifiable := false
+		for _, rec := range state.AnalysisResult.Recommendations {
+			if rec.Command != "" {
+				hasVerifiable = true
 				break
 			}
-			logger.Info("Graph: DecisionNode (verify) completed", logger.String("decision", decisionOutput.Decision))
+		}
+		if !hasVerifiable {
+			logger.Info("Graph: all recommendations are suggestion-only (no command), skipping verify phase")
+		} else {
+			logger.Info("Graph: entering verify phase")
+			state.EnterVerifyPhase(g.maxVerifyIterations)
 
-			// b. 如果 decision == "report" → 跳出验证循环
-			if decisionOutput.Decision == "report" {
-				logger.Info("Graph: verify phase decision is report, breaking loop")
-				break
-			}
-
-			// c. ActionNode（验证模式）
-			logger.Info("Graph: executing ActionNode (verify phase)")
-			state, err = g.actionNode.Execute(ctx, state, decisionOutput)
-			if err != nil {
-				logger.Error("Graph: ActionNode (verify) failed", logger.Err(err))
-			}
-			logger.Info("Graph: ActionNode (verify) completed")
-
-			// d. CompressNode（验证阶段跳过，因为验证轮数少，无需压缩）
-			if !state.VerifyPhase {
-				logger.Info("Graph: executing CompressNode")
-				state, err = g.compressNode.Execute(ctx, state)
+			// 验证迭代循环
+			for {
+				// a. DecisionNode（验证模式）
+				logger.Info("Graph: executing DecisionNode (verify phase)")
+				decisionOutput, err := g.decisionNode.Execute(ctx, state)
 				if err != nil {
-					logger.Error("Graph: CompressNode failed", logger.Err(err))
+					logger.Error("Graph: DecisionNode (verify) failed", logger.Err(err))
+					break
 				}
-				logger.Info("Graph: CompressNode completed")
-			}
-		}
+				logger.Info("Graph: DecisionNode (verify) completed", logger.String("decision", decisionOutput.Decision))
 
-		// 5. 生成终版报告
-		logger.Info("Graph: executing ReportNode for final report")
-		state, err = g.reportNode.Execute(ctx, state)
-		if err != nil {
-			logger.Error("Graph: final ReportNode failed", logger.Err(err))
+				// b. 如果 decision == "report" → 跳出验证循环
+				if decisionOutput.Decision == "report" {
+					logger.Info("Graph: verify phase decision is report, breaking loop")
+					break
+				}
+
+				// c. ActionNode（验证模式）
+				logger.Info("Graph: executing ActionNode (verify phase)")
+				state, err = g.actionNode.Execute(ctx, state, decisionOutput)
+				if err != nil {
+					logger.Error("Graph: ActionNode (verify) failed", logger.Err(err))
+				}
+				logger.Info("Graph: ActionNode (verify) completed")
+
+				// d. CompressNode（验证阶段跳过，因为验证轮数少，无需压缩）
+				if !state.VerifyPhase {
+					logger.Info("Graph: executing CompressNode")
+					state, err = g.compressNode.Execute(ctx, state)
+					if err != nil {
+						logger.Error("Graph: CompressNode failed", logger.Err(err))
+					}
+					logger.Info("Graph: CompressNode completed")
+				}
+			}
+
+			// 5. 生成终版报告
+			logger.Info("Graph: executing ReportNode for final report")
+			state, err = g.reportNode.Execute(ctx, state)
+			if err != nil {
+				logger.Error("Graph: final ReportNode failed", logger.Err(err))
+			}
+			logger.Info("Graph: final ReportNode completed")
 		}
-		logger.Info("Graph: final ReportNode completed")
 	}
 
 	logger.Info("Graph: diagnosis workflow completed")

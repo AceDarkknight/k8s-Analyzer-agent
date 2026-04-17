@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	openaimodel "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	openaimodel "github.com/cloudwego/eino-ext/components/model/openai"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 )
@@ -77,17 +77,33 @@ func (r *LLMRouter) Power() model.ChatModel {
 }
 
 // GenerateWithLight 使用轻量模型生成
-func (r *LLMRouter) GenerateWithLight(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
+func (r *LLMRouter) GenerateWithLight(ctx context.Context, messages []*schema.Message) (*schema.Message, *schema.TokenUsage, error) {
 	if r.light == nil {
-		return nil, fmt.Errorf("light model not initialized")
+		return nil, nil, fmt.Errorf("light model not initialized")
 	}
-	return r.light.Generate(ctx, messages)
+	msg, err := r.light.Generate(ctx, messages)
+	if err != nil {
+		return nil, nil, err
+	}
+	return msg, extractTokenUsage(msg), nil
 }
 
 // GenerateWithPower 使用强力模型生成
-func (r *LLMRouter) GenerateWithPower(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
+func (r *LLMRouter) GenerateWithPower(ctx context.Context, messages []*schema.Message) (*schema.Message, *schema.TokenUsage, error) {
 	if r.power == nil {
-		return nil, fmt.Errorf("power model not initialized")
+		return nil, nil, fmt.Errorf("power model not initialized")
 	}
-	return r.power.Generate(ctx, messages)
+	msg, err := r.power.Generate(ctx, messages)
+	if err != nil {
+		return nil, nil, err
+	}
+	return msg, extractTokenUsage(msg), nil
+}
+
+func extractTokenUsage(msg *schema.Message) *schema.TokenUsage {
+	if msg == nil || msg.ResponseMeta == nil || msg.ResponseMeta.Usage == nil {
+		return nil
+	}
+	usage := *msg.ResponseMeta.Usage
+	return &usage
 }

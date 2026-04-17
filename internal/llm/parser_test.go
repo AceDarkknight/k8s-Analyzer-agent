@@ -75,7 +75,7 @@ func TestParseDecisionResponse(t *testing.T) {
 				"deep_query_topic": ""
 			}`,
 			expectedThought:  "我发现了异常 Pod",
-			expectedDecision: "continue",
+			expectedDecision: "execute_plan",
 			expectError:      false,
 		},
 		{
@@ -127,6 +127,19 @@ func TestParseDecisionResponse(t *testing.T) {
 	}
 }
 
+func TestParseDecisionResponse_UseSkill(t *testing.T) {
+	input := `{
+        "thought": "准备执行技能分析",
+        "decision": "use_skill",
+        "skill_name": "deploy_app_skill",
+        "tool_calls": []
+    }`
+	result, err := ParseDecisionResponse(input)
+	require.NoError(t, err)
+	assert.Equal(t, "use_skill", result.Decision)
+	assert.Equal(t, "deploy_app_skill", result.SkillName)
+}
+
 func TestParseDecisionResponse_ToolCalls(t *testing.T) {
 	input := `{
 		"thought": "查看 Pod 日志",
@@ -139,7 +152,7 @@ func TestParseDecisionResponse_ToolCalls(t *testing.T) {
 
 	result, err := ParseDecisionResponse(input)
 	require.NoError(t, err)
-	assert.Equal(t, "continue", result.Decision)
+	assert.Equal(t, "execute_plan", result.Decision)
 	assert.Len(t, result.ToolCalls, 2)
 	assert.Equal(t, "get_pod_logs", result.ToolCalls[0].Name)
 	assert.Equal(t, "default", result.ToolCalls[0].Args["namespace"])

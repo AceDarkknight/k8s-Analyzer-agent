@@ -3,22 +3,28 @@ package diagnosis
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // DecisionNode 决策节点
 type DecisionNode struct {
-	router *llm.LLMRouter
+	router      *llm.LLMRouter
+	skillLoader *skillpkg.Loader
+	recorder    *trc.TaskRecorder
 }
 
 // DecisionOutput 决策输出
 type DecisionOutput struct {
 	Decision       string
+	SkillName      string
 	Thought        string
 	ToolCalls      []state.ToolCall // 兼容旧模式
 	Plan           []state.PlanStep // 新模式：完整计划
@@ -27,9 +33,11 @@ type DecisionOutput struct {
 }
 
 // NewDecisionNode 创建新的决策节点
-func NewDecisionNode(router *llm.LLMRouter) *DecisionNode {
+func NewDecisionNode(router *llm.LLMRouter, skillLoader *skillpkg.Loader, recorder *trc.TaskRecorder) *DecisionNode {
 	return &DecisionNode{
-		router: router,
+		router:      router,
+		skillLoader: skillLoader,
+		recorder:    recorder,
 	}
 }
 
@@ -65,13 +73,44 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 		}, nil
 	}
 
+	// 主诊断阶段：检查缓存命中率（连续 2 轮 100% 命中 → 无新信息，提前终止）
+	if !s.VerifyPhase && s.GetIterationCount() >= 2 {
+		allCacheHit := true
+		for i := s.GetIterationCount() - 1; i >= s.GetIterationCount()-2 && i >= 1; i-- {
+			stats := s.GetRoundCacheStats(i)
+			if stats == nil || stats.TotalCalls == 0 || stats.CacheHits < stats.TotalCalls {
+				allCacheHit = false
+				break
+			}
+		}
+		if allCacheHit {
+			logger.Info("DecisionNode: consecutive rounds all cache hits, no new info, forcing report")
+			return &DecisionOutput{
+				Decision:  "report",
+				Thought:   "连续 2 轮工具调用全部命中缓存，没有新信息，基于已有数据生成报告",
+				ToolCalls: []state.ToolCall{},
+			}, nil
+		}
+	}
+
 	// 主诊断阶段：增加迭代计数
 	if !s.VerifyPhase {
 		s.IncrementIteration()
 	}
 
 	// 3. 构建 prompt
-	prompt := llm.BuildDecisionPrompt(s)
+	var prompt string
+	if s.VerifyPhase {
+		prompt = llm.BuildVerifyDecisionPrompt(s)
+	} else if s.HasActiveSkill() {
+		prompt = llm.BuildSkillExecutionPrompt(s)
+	} else {
+		skillSummary := ""
+		if n.skillLoader != nil {
+			skillSummary = n.skillLoader.BuildSkillSummary()
+		}
+		prompt = llm.BuildDecisionPrompt(s, skillSummary)
+	}
 	if prompt == "" {
 		logger.Warn("DecisionNode: empty prompt generated")
 		return n.fallbackDecision(s), nil
@@ -82,10 +121,13 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 		schema.UserMessage(prompt),
 	}
 
-	response, err := n.router.GenerateWithLight(ctx, messages)
+	response, usage, err := n.router.GenerateWithLight(ctx, messages)
 	if err != nil {
 		logger.Error("DecisionNode: LLM generation failed", logger.Err(err))
 		return n.fallbackDecision(s), nil
+	}
+	if usage != nil {
+		s.AccumulateTokenUsage(usage)
 	}
 
 	if response == nil || response.Content == "" {
@@ -118,12 +160,22 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 	// 7. 添加 ReasoningStep 到 state
 	step := state.ReasoningStep{
 		Iteration:      s.GetIterationCount(),
+		Timestamp:      time.Now(),
 		Thought:        result.Thought,
 		Decision:       result.Decision,
 		DeepQueryTopic: result.DeepQueryTopic,
 		ToolCalls:      toolCalls,
 	}
+	if usage != nil {
+		step.TokensUsed = usage.TotalTokens
+	}
 	s.AddReasoningStep(step)
+	if n.recorder != nil {
+		n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: step})
+		if usage != nil {
+			n.recorder.Emit(trc.LLMTokenUsedEvent{Source: "decision", PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens})
+		}
+	}
 
 	logger.Info("DecisionNode: decision made",
 		logger.String("decision", result.Decision),
@@ -142,6 +194,7 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 
 	return &DecisionOutput{
 		Decision:       result.Decision,
+		SkillName:      result.SkillName,
 		Thought:        result.Thought,
 		ToolCalls:      toolCalls,
 		Plan:           plan,

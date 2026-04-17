@@ -3,6 +3,8 @@ package state
 import (
 	"sync"
 	"time"
+
+	"github.com/cloudwego/eino/schema"
 )
 
 // State Graph 流转状态
@@ -26,6 +28,14 @@ type State struct {
 	VerifyPhase          bool // 是否处于验证迭代阶段
 	VerifyIterationCount int  // 验证阶段已用迭代次数
 	MaxVerifyIterations  int  // 验证阶段最大迭代数（来自 config）
+	// 缓存命中统计（按轮次）
+	CacheStats map[int]*RoundCacheStats
+	// Skill support
+	ActiveSkillName       string
+	ActiveSkillContent    string
+	TotalPromptTokens     int
+	TotalCompletionTokens int
+	TotalTokens           int
 }
 
 // NewState 创建新的 State
@@ -46,7 +56,29 @@ func NewState(userInput string, maxIterations, compressThreshold int) *State {
 		ReasoningHistory:  make([]ReasoningStep, 0),
 		CommandExecutions: make([]CommandExecution, 0),
 		BlockedCommands:   make([]BlockedCommand, 0),
+		CacheStats:        make(map[int]*RoundCacheStats),
 	}
+}
+
+// ActivateSkill 为当前会话标记并载入技能内容。仅允许首次激活，后续调用不改变已激活的技能。
+func (s *State) ActivateSkill(name string, content string) {
+	if s == nil {
+		return
+	}
+	// 仅在尚未激活技能时生效
+	if s.HasActiveSkill() {
+		return
+	}
+	s.ActiveSkillName = name
+	s.ActiveSkillContent = content
+}
+
+// HasActiveSkill 判断当前会话是否已经激活了技能
+func (s *State) HasActiveSkill() bool {
+	if s == nil {
+		return false
+	}
+	return s.ActiveSkillName != ""
 }
 
 // AddReasoningStep 添加推理步骤
@@ -70,15 +102,25 @@ func (s *State) AddCommandExecution(command string, success bool, output string,
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	exec := CommandExecution{
+	s.AddCommandExecutionRecord(CommandExecution{
 		Command:       command,
 		Success:       success,
 		Output:        output,
 		Timestamp:     time.Now(),
 		IsVerifyPhase: isVerifyPhase,
+	})
+}
+
+// AddCommandExecutionRecord 记录完整命令执行信息
+func (s *State) AddCommandExecutionRecord(exec CommandExecution) {
+	if s == nil {
+		return
 	}
+	if exec.Timestamp.IsZero() {
+		exec.Timestamp = time.Now()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.CommandExecutions = append(s.CommandExecutions, exec)
 }
 
@@ -326,4 +368,57 @@ func (s *State) HasUnverifiedRecommendations() bool {
 		}
 	}
 	return false
+}
+
+// RecordCacheHit 记录当前轮次的缓存命中
+func (s *State) RecordCacheHit(iteration int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stats := s.getOrCreateCacheStats(iteration)
+	stats.TotalCalls++
+	stats.CacheHits++
+}
+
+// RecordCacheMiss 记录当前轮次的缓存未命中
+func (s *State) RecordCacheMiss(iteration int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stats := s.getOrCreateCacheStats(iteration)
+	stats.TotalCalls++
+}
+
+// AccumulateTokenUsage 累加 LLM token 使用量
+func (s *State) AccumulateTokenUsage(usage *schema.TokenUsage) {
+	if s == nil || usage == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TotalPromptTokens += usage.PromptTokens
+	s.TotalCompletionTokens += usage.CompletionTokens
+	s.TotalTokens += usage.TotalTokens
+}
+
+// GetRoundCacheStats 获取指定轮次的缓存统计
+func (s *State) GetRoundCacheStats(iteration int) *RoundCacheStats {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.CacheStats[iteration]
+}
+
+// getOrCreateCacheStats 获取或创建指定轮次的缓存统计（需持有锁）
+func (s *State) getOrCreateCacheStats(iteration int) *RoundCacheStats {
+	if s.CacheStats[iteration] == nil {
+		s.CacheStats[iteration] = &RoundCacheStats{}
+	}
+	return s.CacheStats[iteration]
 }

@@ -33,3 +33,12 @@ go.work.sum
 
 # Logs
 *.log
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Trace data
+data/traces/
+
+.playwright-mcp/

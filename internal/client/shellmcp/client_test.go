@@ -34,9 +34,10 @@ func TestShellMCPClient_ListTools_NotConnected(t *testing.T) {
 	ctx := context.Background()
 	tools, err := client.ListTools(ctx)
 
-	assert.Nil(t, tools)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not connected")
+	assert.NoError(t, err)
+	assert.Len(t, tools, 1)
+	assert.Equal(t, "execute_command", tools[0].Name)
+	assert.Contains(t, tools[0].Description, "Shell 命令")
 }
 
 func TestShellMCPClient_IsConnected(t *testing.T) {

@@ -73,12 +73,35 @@ func (n *CompressNode) Execute(ctx context.Context, s *state.State) (*state.Stat
 	return s, nil
 }
 
-// ruleSummarize 对步骤进行摘要
+// ruleSummarize 对步骤进行摘要（保留工具调用结构化信息）
 func (n *CompressNode) ruleSummarize(steps []state.ReasoningStep) string {
 	var summaries []string
 	for _, step := range steps {
+		// 构建工具调用摘要
+		toolCallSummary := ""
+		if len(step.ToolCalls) > 0 {
+			var tcStrs []string
+			for _, tc := range step.ToolCalls {
+				argStr := ""
+				if ns, ok := tc.Args["namespace"].(string); ok && ns != "" {
+					argStr += "ns=" + ns
+				}
+				if name, ok := tc.Args["name"].(string); ok && name != "" {
+					if argStr != "" {
+						argStr += ","
+					}
+					argStr += "name=" + name
+				}
+				if argStr != "" {
+					tcStrs = append(tcStrs, fmt.Sprintf("%s(%s)", tc.Name, argStr))
+				} else {
+					tcStrs = append(tcStrs, tc.Name)
+				}
+			}
+			toolCallSummary = " [工具: " + strings.Join(tcStrs, ", ") + "]"
+		}
 		keyFinding := n.extractKeyFinding(step.Observation)
-		summary := fmt.Sprintf("迭代%d: %s → %s", step.Iteration, step.Decision, keyFinding)
+		summary := fmt.Sprintf("迭代%d: %s%s → %s", step.Iteration, step.Decision, toolCallSummary, keyFinding)
 		summaries = append(summaries, summary)
 	}
 	return strings.Join(summaries, "\n")
@@ -103,6 +126,14 @@ func (n *CompressNode) extractKeyFinding(observation string) string {
 		"Evicted",
 		"Failed",
 		"NotReady",
+		// 新增资源相关关键词
+		"Allocatable",
+		"Allocated",
+		"Insufficient",
+		"requests",
+		"limits",
+		"cpu",
+		"memory",
 	}
 
 	lines := strings.Split(observation, "\n")
@@ -122,8 +153,8 @@ func (n *CompressNode) extractKeyFinding(observation string) string {
 			}
 		}
 
-		// 最多提取 3 行
-		if len(keyLines) >= 3 {
+		// 最多提取 5 行
+		if len(keyLines) >= 5 {
 			break
 		}
 	}

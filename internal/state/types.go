@@ -153,7 +153,7 @@ type ReasoningStep struct {
 	Iteration      int
 	Timestamp      time.Time
 	Thought        string
-	Decision       string // continue / deep_query / report
+	Decision       string // execute_plan / deep_query / report / use_skill (兼容旧 continue)
 	DeepQueryTopic string // deep_query 模式的调查主题
 	ToolCalls      []ToolCall
 	Observation    string
@@ -192,10 +192,14 @@ type BlockedCommand struct {
 // CommandExecution 命令执行记录
 type CommandExecution struct {
 	Command       string
+	ToolName      string
+	Args          map[string]interface{}
 	Success       bool
 	Output        string
+	DurationMs    int64
 	Timestamp     time.Time
 	IsVerifyPhase bool // 是否属于验证迭代阶段
+	Cached        bool
 }
 
 // PlanStep 诊断计划步骤
@@ -203,4 +207,10 @@ type PlanStep struct {
 	Step        int        `json:"step"`
 	Description string     `json:"description"`
 	ToolCalls   []ToolCall `json:"tool_calls"`
+}
+
+// RoundCacheStats 每轮工具调用的缓存命中统计
+type RoundCacheStats struct {
+	TotalCalls int // 该轮总工具调用数
+	CacheHits  int // 缓存命中数
 }

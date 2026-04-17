@@ -18,7 +18,9 @@ type Config struct {
 	LLM      AgentLLMConfig `yaml:"llm"`
 	Store    StoreConfig    `yaml:"store"`
 	Agent    AgentConfig    `yaml:"agent"`
+	Monitor  MonitorConfig  `yaml:"monitor"`
 	Log      LogConfig      `yaml:"log"`
+	Skill    SkillConfig    `yaml:"skill"`
 }
 
 // GatewayConfig 网关配置
@@ -65,15 +67,24 @@ type RedisConfig struct {
 	DB       int    `yaml:"db"`
 }
 
+// ToolCacheConfig 工具缓存配置
+type ToolCacheConfig struct {
+	Backend string `yaml:"backend"`  // "memory" | "redis" | "file"，默认 "memory"
+	TTL     string `yaml:"ttl"`      // 缓存过期时间，如 "10m"，默认 "10m"
+	FileDir string `yaml:"file_dir"` // backend=file 时的缓存目录
+}
+
 // AgentConfig Agent 行为配置
 type AgentConfig struct {
-	MaxIterations         int  `yaml:"max_iterations"`         // 默认 10
-	CompressThreshold     int  `yaml:"compress_threshold"`     // 默认 4
-	OutputMaxLines        int  `yaml:"output_max_lines"`       // 默认 50
-	OutputMaxChars        int  `yaml:"output_max_chars"`       // 默认 3000
-	FindingTTLHours       int  `yaml:"finding_ttl_hours"`      // 默认 1
-	VerifyRecommendations bool `yaml:"verify_recommendations"` // 是否启用验证迭代，默认 true
-	MaxVerifyIterations   int  `yaml:"max_verify_iterations"`  // 验证阶段最大迭代数，默认 2
+	MaxIterations         int             `yaml:"max_iterations"`         // 默认 10
+	CompressThreshold     int             `yaml:"compress_threshold"`     // 默认 4
+	OutputMaxLines        int             `yaml:"output_max_lines"`       // 默认 50
+	OutputMaxChars        int             `yaml:"output_max_chars"`       // 默认 3000
+	FindingTTLHours       int             `yaml:"finding_ttl_hours"`      // 默认 1
+	VerifyRecommendations bool            `yaml:"verify_recommendations"` // 是否启用验证迭代，默认 true
+	MaxVerifyIterations   int             `yaml:"max_verify_iterations"`  // 验证阶段最大迭代数，默认 2
+	MaxNamespaces         int             `yaml:"max_namespaces"`         // 0=动态计算，>0=固定上限
+	ToolCache             ToolCacheConfig `yaml:"tool_cache"`             // 工具调用缓存配置
 }
 
 // LogConfig 日志配置
@@ -82,6 +93,18 @@ type LogConfig struct {
 	FilePath   string `yaml:"file_path"`
 	MaxSizeMB  int    `yaml:"max_size_mb"`
 	MaxBackups int    `yaml:"max_backups"`
+}
+
+// SkillConfig Skill 中间件配置
+type SkillConfig struct {
+	Enabled bool   `yaml:"enabled"` // 是否启用技能中间件
+	Dir     string `yaml:"dir"`     // 技能目录，默认 ./skills
+}
+
+// MonitorConfig 监控与 Trace 配置
+type MonitorConfig struct {
+	APIPort  int    `yaml:"api_port"`
+	TraceDir string `yaml:"trace_dir"`
 }
 
 // envVarPattern 匹配 ${ENV_VAR} 或 ${ENV_VAR:-default} 格式的正则表达式
@@ -191,6 +214,22 @@ func (c *Config) setDefaults() {
 	if c.Agent.MaxVerifyIterations == 0 {
 		c.Agent.MaxVerifyIterations = 2
 	}
+	if c.Agent.ToolCache.Backend == "" {
+		c.Agent.ToolCache.Backend = "memory"
+	}
+	if c.Agent.ToolCache.TTL == "" {
+		c.Agent.ToolCache.TTL = "10m"
+	}
+	// Skill middleware 默认配置
+	if c.Skill.Dir == "" {
+		c.Skill.Dir = "./skills"
+	}
+	if c.Monitor.APIPort == 0 {
+		c.Monitor.APIPort = 9090
+	}
+	if c.Monitor.TraceDir == "" {
+		c.Monitor.TraceDir = "data/traces"
+	}
 }
 
 // validate 校验必填字段
@@ -213,7 +252,7 @@ func (c *Config) validate() error {
 // String 返回配置的字符串表示（用于调试，隐藏敏感信息）
 func (c *Config) String() string {
 	return fmt.Sprintf(
-		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyIterations:%d}, Log:{Level:%s FilePath:%s}}",
+		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyIterations:%d}, Monitor:{APIPort:%d TraceDir:%s}, Skill:{Enabled:%t Dir:%s}, Log:{Level:%s FilePath:%s}}",
 		c.Gateway.BaseURL,
 		c.Gateway.TimeoutSeconds,
 		c.ShellMCP.ServerURL,
@@ -230,6 +269,10 @@ func (c *Config) String() string {
 		c.Agent.FindingTTLHours,
 		c.Agent.VerifyRecommendations,
 		c.Agent.MaxVerifyIterations,
+		c.Monitor.APIPort,
+		c.Monitor.TraceDir,
+		c.Skill.Enabled,
+		c.Skill.Dir,
 		c.Log.Level,
 		c.Log.FilePath,
 	)

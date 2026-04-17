@@ -18,6 +18,7 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/store"
 )
@@ -146,11 +147,60 @@ func main() {
 	}
 	defer findingStore.Close()
 
-	// 11. 初始化 Main Agent
-	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, &cfg.Agent)
+	// 10.5 初始化 ToolCacheStore
+	var toolCache store.ToolCacheStore
+	cacheTTL, _ := time.ParseDuration(cfg.Agent.ToolCache.TTL)
+	if cacheTTL <= 0 {
+		cacheTTL = 10 * time.Minute
+	}
+	switch cfg.Agent.ToolCache.Backend {
+	case "redis":
+		redisToolCache, cacheErr := store.NewRedisToolCache(cfg.Store.Redis.Host, cfg.Store.Redis.Port, cfg.Store.Redis.Password, cfg.Store.Redis.DB)
+		if cacheErr != nil {
+			logger.Fatal("ToolCache: Redis 后端初始化失败", logger.Err(cacheErr))
+		}
+		toolCache = redisToolCache
+		logger.Info("ToolCache: Redis 后端初始化成功")
+	case "file":
+		fileCache, fcErr := store.NewFileToolCache(cfg.Agent.ToolCache.FileDir)
+		if fcErr != nil {
+			logger.Fatal("ToolCache: 文件后端初始化失败", logger.Err(fcErr))
+		}
+		toolCache = fileCache
+		logger.Info("ToolCache: 文件后端初始化成功", logger.String("dir", cfg.Agent.ToolCache.FileDir))
+	default:
+		toolCache = store.NewMemoryToolCache(cacheTTL)
+		logger.Info("ToolCache: 内存后端初始化成功")
+	}
+	defer toolCache.Close()
+
+	// 10.8 初始化 TraceStore
+	traceStore, err := store.NewFileTraceStore(cfg.Monitor.TraceDir)
+	if err != nil {
+		logger.Fatal("TraceStore 初始化失败", logger.Err(err))
+	}
+	defer traceStore.Close()
+	logger.Info("TraceStore 初始化成功", logger.String("dir", cfg.Monitor.TraceDir))
+
+	// 11. 初始化 Skill Loader（可降级）
+	var skillLoader *skillpkg.Loader
+	if cfg.Skill.Enabled {
+		skillLoader, err = skillpkg.NewLoader(ctx, cfg.Skill.Dir)
+		if err != nil {
+			logger.Warn("Skill Loader 初始化失败，将按普通流程运行", logger.Err(err))
+			skillLoader = nil
+		} else {
+			logger.Info("Skill Loader 初始化完成", logger.String("dir", cfg.Skill.Dir))
+		}
+	} else {
+		logger.Info("Skill 中间件未开启")
+	}
+
+	// 12. 初始化 Main Agent
+	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, toolCache, skillLoader, traceStore, &cfg.Agent)
 	logger.Info("Main Agent 初始化成功")
 
-	// 12. 执行诊断
+	// 13. 执行诊断
 	fmt.Printf("开始诊断: %s\n\n", userQuery)
 	result, err := agent.Run(ctx, userQuery)
 	if err != nil {
@@ -158,7 +208,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 13. 输出报告
+	// 14. 输出报告
 	if result != nil {
 		printReport(result)
 	} else {
