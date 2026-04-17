@@ -188,7 +188,7 @@
     *   `internal/config/config.go` 新增 `MonitorConfig`：
         ```go
         type MonitorConfig struct {
-            APIPort  int    `yaml:"api_port"`   // 默认 8080
+            APIPort  int    `yaml:"api_port"`   // 默认 9090
             TraceDir string `yaml:"trace_dir"`  // 默认 "data/traces"
         }
         ```
@@ -275,7 +275,7 @@
 *   **4.1 初始化 React 项目:**
     *   在 `web/` 目录下执行 `npm create vite@latest . -- --template react-ts`。
     *   安装依赖：`npm install react-router-dom axios antd@^5 @ant-design/icons recharts react-markdown`。
-    *   配置 `vite.config.ts` 设置 proxy，将 `/api` 和 `/metrics` 代理到 `http://localhost:8080`。
+    *   配置 `vite.config.ts` 设置 proxy，将 `/api` 和 `/metrics` 代理到 `http://localhost:9090`。
 
 *   **4.2 布局与路由:**
     *   实现基础 Admin 布局（侧边栏 + 内容区）。
@@ -346,7 +346,7 @@
 *   验证 CLI 在 Trace 写入完成前不会退出；写入完成后索引文件与详情文件同时可见。
 *   验证 Trace 中保存的是摘要输出而非原始输出，并验证敏感字段已被脱敏。
 *   验证 TaskRecorder 能正确收集 DeepQuery 的逐轮 Token 事件、工具调用事件、任务结束事件，并在 `Close + Wait` 后完整生成 Trace。
-*   编译并启动 `go run ./cmd/k8s-monitor`，访问 `http://localhost:8080/metrics` 验证 Prometheus 指标。
-*   访问 `http://localhost:8080/api/v1/tasks` 验证 JSON 响应格式（`{code, message, data}`）和分页。
+*   编译并启动 `go run ./cmd/k8s-monitor`，访问 `http://localhost:9090/metrics` 验证 Prometheus 指标。
+*   访问 `http://localhost:9090/api/v1/tasks` 验证 JSON 响应格式（`{code, message, data}`）和分页。
 *   验证错误响应：访问不存在的 task_id，确认返回 `{"code": 40400, "message": "resource not found", "data": null}`。
 *   启动前端 `cd web && npm run dev`，验证 Dashboard 数据、任务列表、详情页执行链。
