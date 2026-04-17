@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 import { fetchTasks } from '../../api';
 import type { TaskIndexRecord } from '../../api/types';
+import { formatDuration, formatTokens } from '../../utils/format';
 
 const { Title } = Typography;
 
@@ -12,17 +13,6 @@ const statusColorMap: Record<string, string> = {
   success: 'green',
   failed: 'red',
 };
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
 
 export default function TaskList() {
   const navigate = useNavigate();

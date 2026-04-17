@@ -57,6 +57,9 @@ agent:
   output_max_lines: 100
   output_max_chars: 5000
   finding_ttl_hours: 2
+monitor:
+  api_port: 18080
+  trace_dir: "data/traces"
 log:
   level: "info"
   file_path: "/var/log/app.log"
@@ -106,6 +109,10 @@ log:
 	assert.Equal(t, 100, cfg.Agent.OutputMaxLines)
 	assert.Equal(t, 5000, cfg.Agent.OutputMaxChars)
 	assert.Equal(t, 2, cfg.Agent.FindingTTLHours)
+
+	// 验证 Monitor 配置
+	assert.Equal(t, 18080, cfg.Monitor.APIPort)
+	assert.Equal(t, "data/traces", cfg.Monitor.TraceDir)
 
 	// 验证 Log 配置
 	assert.Equal(t, "info", cfg.Log.Level)

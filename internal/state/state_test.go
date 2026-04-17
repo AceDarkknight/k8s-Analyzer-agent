@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cloudwego/eino/schema"
 )
 
 // TestNewStateDefaults 测试 NewState 默认值
@@ -275,6 +277,19 @@ func TestAddCommandExecution(t *testing.T) {
 
 	if s.CommandExecutions[0].Command != "kubectl get pods" {
 		t.Errorf("expected command to be 'kubectl get pods', got %s", s.CommandExecutions[0].Command)
+	}
+	if s.CommandExecutions[0].Timestamp.IsZero() {
+		t.Error("expected timestamp to be set")
+	}
+}
+
+func TestAccumulateTokenUsage(t *testing.T) {
+	s := NewState("test", 10, 4)
+	s.AccumulateTokenUsage(&schema.TokenUsage{PromptTokens: 3, CompletionTokens: 7, TotalTokens: 10})
+	s.AccumulateTokenUsage(&schema.TokenUsage{PromptTokens: 2, CompletionTokens: 1, TotalTokens: 3})
+
+	if s.TotalPromptTokens != 5 || s.TotalCompletionTokens != 8 || s.TotalTokens != 13 {
+		t.Fatalf("unexpected token totals: %+v", s)
 	}
 }
 

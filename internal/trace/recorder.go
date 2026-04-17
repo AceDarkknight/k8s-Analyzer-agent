@@ -2,7 +2,6 @@ package trace
 
 import (
 	"sync"
-	"sync/atomic"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 )
@@ -12,8 +11,9 @@ type TaskRecorder struct {
 	events    chan TraceEvent
 	draft     *TaskTraceDraft
 	mu        sync.RWMutex
+	stateMu   sync.Mutex
 	wg        sync.WaitGroup
-	closed    atomic.Bool
+	closed    bool
 	closeOnce sync.Once
 }
 
@@ -45,7 +45,12 @@ func (r *TaskRecorder) run() {
 }
 
 func (r *TaskRecorder) Emit(event TraceEvent) {
-	if r == nil || event == nil || r.closed.Load() {
+	if r == nil || event == nil {
+		return
+	}
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	if r.closed {
 		return
 	}
 	r.events <- event
@@ -56,8 +61,10 @@ func (r *TaskRecorder) Close() {
 		return
 	}
 	r.closeOnce.Do(func() {
-		r.closed.Store(true)
+		r.stateMu.Lock()
+		r.closed = true
 		close(r.events)
+		r.stateMu.Unlock()
 	})
 }
 

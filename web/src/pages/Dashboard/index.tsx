@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { fetchTaskStats } from '../../api'
 import type { TaskStatsData } from '../../api/types'
+import { formatDuration } from '../../utils/format'
 
 const TrendChart = lazy(() => import('./TrendChart'))
 
@@ -103,7 +104,7 @@ export default function Dashboard() {
             <StatCard title="成功率" value={`${successRate}%`} accent="#12b76a" />
             <StatCard title="失败任务" value={failCount} accent={failCount > 0 ? '#f04438' : undefined} />
             <StatCard title="总 Token 用量" value={totalTokens.toLocaleString()} />
-            <StatCard title="平均耗时" value={`${avgDuration}ms`} />
+            <StatCard title="平均耗时" value={formatDuration(avgDuration)} />
             <StatCard title="成功 / 失败" value={`${successCount} / ${failCount}`} />
           </div>
 

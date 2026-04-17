@@ -25,23 +25,11 @@ import {
 } from '@ant-design/icons';
 import { fetchTaskDetail } from '../../api';
 import type { TaskTrace, TraceReasoningStep } from '../../api/types';
+import { formatDuration, formatTimestamp } from '../../utils/format';
 
 const MarkdownReport = lazy(() => import('./MarkdownReport'))
 
 const { Title, Paragraph } = Typography;
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  const min = Math.floor(ms / 60000);
-  const sec = ((ms % 60000) / 1000).toFixed(0);
-  return `${min}m ${sec}s`;
-}
-
-function formatTimestamp(ts: string): string {
-  if (!ts) return '-';
-  return ts.replace('T', ' ').slice(0, 19);
-}
 
 // 执行链 Tab 内容
 function TracesTab({ trace }: { trace: TaskTrace }) {
