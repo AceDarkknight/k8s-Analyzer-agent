@@ -23,6 +23,19 @@ func (e TaskStartedEvent) apply(draft *TaskTraceDraft) {
 	draft.UserInput = e.UserInput
 }
 
+// LLMCallEvent 单次 LLM 调用事件（同时记录明细并累加 Token 总量）
+type LLMCallEvent struct {
+	Call LLMCallRecord
+}
+
+func (e LLMCallEvent) apply(draft *TaskTraceDraft) {
+	draft.LLMCalls = append(draft.LLMCalls, e.Call)
+	draft.TokenUsage.PromptTokens += e.Call.PromptTokens
+	draft.TokenUsage.CompletionTokens += e.Call.CompletionTokens
+	draft.TokenUsage.TotalTokens += e.Call.TotalTokens
+}
+
+// LLMTokenUsedEvent 已废弃，保留以兼容旧代码（不再主动使用）
 type LLMTokenUsedEvent struct {
 	Source           string
 	PromptTokens     int

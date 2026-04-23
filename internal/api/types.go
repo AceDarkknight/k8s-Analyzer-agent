@@ -72,18 +72,19 @@ type reasoningStepDTO struct {
 }
 
 type taskTraceDTO struct {
-	TaskID           string             `json:"task_id"`
-	Timestamp        string             `json:"timestamp"`
-	UserInput        string             `json:"user_input"`
-	Status           string             `json:"status"`
-	TotalDurationMs  int64              `json:"total_duration_ms"`
-	TokenUsage       trc.TokenUsage     `json:"token_usage"`
-	K8sInfo          *state.K8sInfo     `json:"k8s_info,omitempty"`
-	ReasoningHistory []reasoningStepDTO `json:"reasoning_history,omitempty"`
-	ToolExecutions   []toolCallDTO      `json:"tool_executions,omitempty"`
-	AnalysisResult   string             `json:"analysis_result,omitempty"`
-	Error            string             `json:"error,omitempty"`
-	ActiveSkillName  string             `json:"active_skill_name,omitempty"`
+	TaskID           string              `json:"task_id"`
+	Timestamp        string              `json:"timestamp"`
+	UserInput        string              `json:"user_input"`
+	Status           string              `json:"status"`
+	TotalDurationMs  int64               `json:"total_duration_ms"`
+	TokenUsage       trc.TokenUsage      `json:"token_usage"`
+	LLMCalls         []trc.LLMCallRecord `json:"llm_calls,omitempty"`
+	K8sInfo          *state.K8sInfo      `json:"k8s_info,omitempty"`
+	ReasoningHistory []reasoningStepDTO  `json:"reasoning_history,omitempty"`
+	ToolExecutions   []toolCallDTO       `json:"tool_executions,omitempty"`
+	AnalysisResult   string              `json:"analysis_result,omitempty"`
+	Error            string              `json:"error,omitempty"`
+	ActiveSkillName  string              `json:"active_skill_name,omitempty"`
 }
 
 func normalizeStatus(status string) string {
@@ -127,7 +128,7 @@ func toTaskTraceDTO(trace *trc.TaskTrace) taskTraceDTO {
 			Cached:     exec.Cached,
 		})
 	}
-	steps := enrichReasoningSteps(trace.ReasoningHistory, trace.ToolExecutions)
+	steps := enrichReasoningSteps(trace.ReasoningHistory)
 	return taskTraceDTO{
 		TaskID:           trace.TaskID,
 		Timestamp:        trace.Timestamp,
@@ -135,6 +136,7 @@ func toTaskTraceDTO(trace *trc.TaskTrace) taskTraceDTO {
 		Status:           normalizeStatus(trace.Status),
 		TotalDurationMs:  trace.TotalDurationMs,
 		TokenUsage:       trace.TokenUsage,
+		LLMCalls:         trace.LLMCalls,
 		K8sInfo:          trace.K8sInfo,
 		ReasoningHistory: steps,
 		ToolExecutions:   toolExecs,
@@ -144,39 +146,21 @@ func toTaskTraceDTO(trace *trc.TaskTrace) taskTraceDTO {
 	}
 }
 
-func enrichReasoningSteps(steps []trc.TraceReasoningStep, execs []trc.TraceToolExecution) []reasoningStepDTO {
-	// 按 (iteration, toolName) 建立索引，同名工具保留有序列表以处理同轮多次调用
-	type iterToolKey struct {
-		iteration int
-		toolName  string
-	}
-	execIndex := map[iterToolKey][]trc.TraceToolExecution{}
-	for _, exec := range execs {
-		key := iterToolKey{exec.Iteration, exec.ToolName}
-		execIndex[key] = append(execIndex[key], exec)
-	}
-	// 记录每个 (iteration, toolName) 已消费的偏移量
-	usedOffset := map[iterToolKey]int{}
-
+// enrichReasoningSteps 将已由 BuildTaskTrace 回填好的工具调用详情转换为 DTO
+func enrichReasoningSteps(steps []trc.TraceReasoningStep) []reasoningStepDTO {
 	result := make([]reasoningStepDTO, 0, len(steps))
 	for _, step := range steps {
 		calls := make([]toolCallDTO, 0, len(step.ToolCalls))
 		for _, call := range step.ToolCalls {
-			dto := toolCallDTO{ToolName: call.Name, Args: call.Args}
-			key := iterToolKey{step.Iteration, call.Name}
-			if list, ok := execIndex[key]; ok {
-				idx := usedOffset[key]
-				if idx < len(list) {
-					exec := list[idx]
-					usedOffset[key] = idx + 1
-					dto.Success = exec.Success
-					dto.Output = exec.Output
-					dto.DurationMs = exec.DurationMs
-					dto.Timestamp = exec.Timestamp
-					dto.Cached = exec.Cached
-				}
-			}
-			calls = append(calls, dto)
+			calls = append(calls, toolCallDTO{
+				ToolName:   call.ToolName,
+				Args:       call.Args,
+				Success:    call.Success,
+				Output:     call.Output,
+				DurationMs: call.DurationMs,
+				Timestamp:  call.Timestamp,
+				Cached:     call.Cached,
+			})
 		}
 		result = append(result, reasoningStepDTO{
 			Iteration:   step.Iteration,

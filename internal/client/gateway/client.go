@@ -128,13 +128,13 @@ func (c *GatewayClient) Execute(ctx context.Context, req *KubectlRequest) (*Kube
 
 // ListPods 列出 Pod
 func (c *GatewayClient) ListPods(ctx context.Context, ns, labelSelector string) (*KubectlResponse, error) {
-	req := &KubectlRequest{
-		Verb:      "get",
-		Resource:  "pods",
-		Namespace: ns,
-		Output:    "json",
-		Mode:      "structured",
-	}
+    req := &KubectlRequest{
+        Verb:      "get",
+        Resource:  "pods",
+        Namespace: ns,
+        Output:    "wide",
+        Mode:      "structured",
+    }
 
 	if labelSelector != "" {
 		req.Options = &KubectlOptions{
@@ -194,25 +194,25 @@ func (c *GatewayClient) ListEvents(ctx context.Context, ns string) (*KubectlResp
 
 // ListDeployments 列出 Deployment
 func (c *GatewayClient) ListDeployments(ctx context.Context, ns string) (*KubectlResponse, error) {
-	req := &KubectlRequest{
-		Verb:      "get",
-		Resource:  "deployments",
-		Namespace: ns,
-		Output:    "json",
-		Mode:      "structured",
-	}
+    req := &KubectlRequest{
+        Verb:      "get",
+        Resource:  "deployments",
+        Namespace: ns,
+        Output:    "wide",
+        Mode:      "structured",
+    }
 
 	return c.Execute(ctx, req)
 }
 
 // ListNamespaces 列出命名空间
 func (c *GatewayClient) ListNamespaces(ctx context.Context) (*KubectlResponse, error) {
-	req := &KubectlRequest{
-		Verb:     "get",
-		Resource: "namespaces",
-		Output:   "json",
-		Mode:     "structured",
-	}
+    req := &KubectlRequest{
+        Verb:     "get",
+        Resource: "namespaces",
+        Output:   "wide",
+        Mode:     "structured",
+    }
 
 	return c.Execute(ctx, req)
 }
@@ -231,13 +231,13 @@ func (c *GatewayClient) GetNodes(ctx context.Context) (*KubectlResponse, error) 
 
 // ListServices 列出服务
 func (c *GatewayClient) ListServices(ctx context.Context, ns string) (*KubectlResponse, error) {
-	req := &KubectlRequest{
-		Verb:      "get",
-		Resource:  "services",
-		Namespace: ns,
-		Output:    "json",
-		Mode:      "structured",
-	}
+    req := &KubectlRequest{
+        Verb:      "get",
+        Resource:  "services",
+        Namespace: ns,
+        Output:    "wide",
+        Mode:      "structured",
+    }
 
 	return c.Execute(ctx, req)
 }

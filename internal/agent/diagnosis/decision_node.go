@@ -121,7 +121,9 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 		schema.UserMessage(prompt),
 	}
 
+	llmStart := time.Now()
 	response, usage, err := n.router.GenerateWithLight(ctx, messages)
+	llmDuration := time.Since(llmStart)
 	if err != nil {
 		logger.Error("DecisionNode: LLM generation failed", logger.Err(err))
 		return n.fallbackDecision(s), nil
@@ -173,7 +175,16 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 	if n.recorder != nil {
 		n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: step})
 		if usage != nil {
-			n.recorder.Emit(trc.LLMTokenUsedEvent{Source: "decision", PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens})
+			n.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
+				ModelType:        "light",
+				ModelName:        n.router.LightModelName(),
+				Source:           "decision",
+				PromptTokens:     usage.PromptTokens,
+				CompletionTokens: usage.CompletionTokens,
+				TotalTokens:      usage.TotalTokens,
+				DurationMs:       llmDuration.Milliseconds(),
+				Timestamp:        time.Now().Format(time.RFC3339),
+			}})
 		}
 	}
 

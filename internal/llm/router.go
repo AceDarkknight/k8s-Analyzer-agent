@@ -13,8 +13,10 @@ import (
 
 // LLMRouter 管理 Light/Power 两个模型
 type LLMRouter struct {
-	light model.ChatModel
-	power model.ChatModel
+	light       model.ChatModel
+	power       model.ChatModel
+	lightModel  string
+	powerModel  string
 }
 
 // NewLLMRouter 创建 LLM Router
@@ -32,8 +34,10 @@ func NewLLMRouter(ctx context.Context, cfg *config.AgentLLMConfig) (*LLMRouter, 
 	}
 
 	return &LLMRouter{
-		light: lightModel,
-		power: powerModel,
+		light:      lightModel,
+		power:      powerModel,
+		lightModel: cfg.Light.Model,
+		powerModel: cfg.Power.Model,
 	}, nil
 }
 
@@ -74,6 +78,16 @@ func (r *LLMRouter) Light() model.ChatModel {
 // Power 返回强力模型
 func (r *LLMRouter) Power() model.ChatModel {
 	return r.power
+}
+
+// LightModelName 返回轻量模型名称
+func (r *LLMRouter) LightModelName() string {
+	return r.lightModel
+}
+
+// PowerModelName 返回强力模型名称
+func (r *LLMRouter) PowerModelName() string {
+	return r.powerModel
 }
 
 // GenerateWithLight 使用轻量模型生成

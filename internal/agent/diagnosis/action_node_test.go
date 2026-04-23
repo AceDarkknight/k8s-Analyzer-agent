@@ -171,3 +171,40 @@ func TestBuildCmdStr(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultOutputForVerb(t *testing.T) {
+	tests := []struct {
+		name     string
+		verb     string
+		expected string
+	}{
+		{
+			name:     "get uses json output",
+			verb:     "get",
+			expected: "json",
+		},
+		{
+			name:     "describe omits output",
+			verb:     "describe",
+			expected: "",
+		},
+		{
+			name:     "logs omits output",
+			verb:     "logs",
+			expected: "",
+		},
+		{
+			name:     "empty verb omits output",
+			verb:     "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := defaultOutputForVerb(tt.verb); got != tt.expected {
+				t.Errorf("defaultOutputForVerb(%q) = %q, want %q", tt.verb, got, tt.expected)
+			}
+		})
+	}
+}

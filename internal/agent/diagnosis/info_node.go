@@ -193,6 +193,8 @@ func (n *InfoNode) collectDeployments(ctx context.Context, ns string) ([]interfa
 		return nil, err
 	}
 
+	deployments = applyNamespaceToScopedResources(deployments, ns)
+
 	return deployments, nil
 }
 
@@ -208,7 +210,37 @@ func (n *InfoNode) collectServices(ctx context.Context, ns string) ([]interface{
 		return nil, err
 	}
 
+	services = applyNamespaceToScopedResources(services, ns)
+
 	return services, nil
+}
+
+func applyNamespaceToScopedResources(resources []interface{}, namespace string) []interface{} {
+	if namespace == "" {
+		return resources
+	}
+
+	for i, resource := range resources {
+		switch v := resource.(type) {
+		case state.PodInfo:
+			if v.Namespace == "" {
+				v.Namespace = namespace
+				resources[i] = v
+			}
+		case state.DeploymentInfo:
+			if v.Namespace == "" {
+				v.Namespace = namespace
+				resources[i] = v
+			}
+		case state.ServiceInfo:
+			if v.Namespace == "" {
+				v.Namespace = namespace
+				resources[i] = v
+			}
+		}
+	}
+
+	return resources
 }
 
 // collectNodes 收集节点信息
@@ -379,11 +411,20 @@ func parsePods(stdout string, namespace string) ([]interface{}, error) {
 	return parsePodTableFormat(stdout, namespace)
 }
 
-// parsePodTableFormat 解析 Pod 表格格式
+// parsePodTableFormat 解析 Pod 表格格式（支持 wide/non-wide 头部）
 func parsePodTableFormat(stdout string, namespace string) ([]interface{}, error) {
 	lines := strings.Split(stdout, "\n")
 	var pods []interface{}
-	var headerFound bool
+	headerFound := false
+	hasNamespace := false
+	hasReady := false
+	hasStatus := false
+	hasRestarts := false
+	hasAge := false
+	hasIP := false
+	hasNode := false
+	hasNominatedNode := false
+	hasReadinessGates := false
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -391,36 +432,84 @@ func parsePodTableFormat(stdout string, namespace string) ([]interface{}, error)
 			continue
 		}
 
-		// 跳过表头行
-		if strings.Contains(line, "NAME") && strings.Contains(line, "STATUS") && !headerFound {
+		upper := strings.ToUpper(line)
+		if strings.Contains(upper, "NAME") && strings.Contains(upper, "STATUS") && !headerFound {
 			headerFound = true
+			hasNamespace = strings.Contains(upper, "NAMESPACE")
+			hasReady = strings.Contains(upper, "READY")
+			hasStatus = strings.Contains(upper, "STATUS")
+			hasRestarts = strings.Contains(upper, "RESTARTS")
+			hasAge = strings.Contains(upper, "AGE")
+			hasIP = strings.Contains(upper, " IP ") || strings.HasSuffix(upper, " IP") || strings.Contains(upper, " IP ")
+			hasNode = strings.Contains(upper, " NODE")
+			hasNominatedNode = strings.Contains(upper, "NOMINATED NODE")
+			hasReadinessGates = strings.Contains(upper, "READINESS GATES")
 			continue
 		}
 
-		// 解析数据行
-		if headerFound {
-			fields := strings.Fields(line)
-			if len(fields) >= 1 && fields[0] != "" {
-				pod := state.PodInfo{
-					Name:      fields[0],
-					Namespace: namespace,
-				}
-				// 尝试提取状态（通常在第3列）
-				if len(fields) >= 3 {
-					pod.Status = fields[2]
-				} else {
-					pod.Status = "Unknown"
-				}
-				// 尝试提取重启次数（通常在第4列）
-				if len(fields) >= 4 {
-					restartStr := fields[3]
-					var restarts int32
-					fmt.Sscanf(restartStr, "%d", &restarts)
-					pod.Restarts = restarts
-				}
-				pods = append(pods, pod)
-			}
+		if !headerFound {
+			continue
 		}
+
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+
+		pod := state.PodInfo{Namespace: namespace}
+		left := 0
+
+		if hasNamespace && left < len(fields) {
+			pod.Namespace = fields[left]
+			left++
+		}
+
+		if left < len(fields) {
+			pod.Name = fields[left]
+			left++
+		}
+
+		if hasReady && left < len(fields) {
+			left++
+		}
+
+		if hasStatus && left < len(fields) {
+			pod.Status = fields[left]
+			left++
+		}
+
+		right := len(fields)
+
+		if hasReadinessGates && right > left {
+			right--
+		}
+		if hasNominatedNode && right > left {
+			right--
+		}
+		if hasNode && right > left {
+			pod.NodeName = fields[right-1]
+			right--
+		}
+		if hasIP && right > left {
+			right--
+		}
+		if hasAge && right > left {
+			pod.Age = fields[right-1]
+			right--
+		}
+
+		if hasRestarts && left < right {
+			restartField := strings.Join(fields[left:right], " ")
+			var restarts int32
+			fmt.Sscanf(restartField, "%d", &restarts)
+			pod.Restarts = restarts
+		}
+
+		pods = append(pods, pod)
+	}
+
+	if !headerFound {
+		return nil, fmt.Errorf("failed to parse pod table format: header not found")
 	}
 
 	return pods, nil
@@ -467,16 +556,105 @@ func parseDeployments(stdout string) ([]interface{}, error) {
 	}
 
 	// JSON 解析失败，尝试表格格式解析
+	if stdout != "" {
+		if deployments, err := parseDeploymentTableFormat(stdout); err == nil {
+			return deployments, nil
+		}
+	}
+
 	names, err := parseTableFormat(stdout, "NAME")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse deployments: %w", err)
 	}
 
-	// 表格格式只能获取名称列表
 	deployments := make([]interface{}, 0, len(names))
 	for _, name := range names {
 		deployments = append(deployments, state.DeploymentInfo{Name: name})
 	}
+	return deployments, nil
+}
+
+// parseDeploymentTableFormat 解析 Deployment 的 wide 表格格式
+func parseDeploymentTableFormat(stdout string) ([]interface{}, error) {
+	lines := strings.Split(stdout, "\n")
+	var deployments []interface{}
+	headerFound := false
+	idx := map[string]int{}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		upper := strings.ToUpper(line)
+		if strings.Contains(upper, "NAME") && strings.Contains(upper, "READY") && !headerFound {
+			headerFound = true
+			fields := strings.Fields(line)
+			for i, h := range fields {
+				key := strings.ToLower(h)
+				switch key {
+				case "name":
+					idx["name"] = i
+				case "ready":
+					idx["ready"] = i
+				case "up-to-date":
+					idx["up_to_date"] = i
+				case "updated":
+					idx["updated"] = i
+				case "available":
+					idx["available"] = i
+				case "age":
+					idx["age"] = i
+				}
+			}
+			continue
+		}
+		if headerFound {
+			fields := strings.Fields(line)
+			var name string
+			if v, ok := idx["name"]; ok && v < len(fields) {
+				name = fields[v]
+			} else if len(fields) > 0 {
+				name = fields[0]
+			}
+			dep := state.DeploymentInfo{Name: name}
+
+			if v, ok := idx["ready"]; ok && v < len(fields) {
+				ready := fields[v]
+				if parts := strings.Split(ready, "/"); len(parts) == 2 {
+					var readyNum int32
+					var repTotal int32
+					fmt.Sscanf(parts[0], "%d", &readyNum)
+					fmt.Sscanf(parts[1], "%d", &repTotal)
+					dep.ReadyReplicas = readyNum
+					dep.Replicas = repTotal
+				}
+			}
+
+			if v, ok := idx["up_to_date"]; ok && v < len(fields) {
+				var upd int32
+				fmt.Sscanf(fields[v], "%d", &upd)
+				dep.UpdatedReplicas = upd
+			} else if v, ok := idx["updated"]; ok && v < len(fields) {
+				var upd int32
+				fmt.Sscanf(fields[v], "%d", &upd)
+				dep.UpdatedReplicas = upd
+			}
+
+			if v, ok := idx["available"]; ok && v < len(fields) {
+				var av int32
+				fmt.Sscanf(fields[v], "%d", &av)
+				dep.AvailableReplicas = av
+			}
+
+			deployments = append(deployments, dep)
+		}
+	}
+
+	if !headerFound {
+		return nil, fmt.Errorf("failed to parse deployment table format: header not found")
+	}
+
 	return deployments, nil
 }
 
@@ -524,6 +702,10 @@ func parseServices(stdout string) ([]interface{}, error) {
 	}
 
 	// JSON 解析失败，尝试表格格式
+	// 先尝试 wide 表头解析
+	if services, err := parseServiceTableFormat(stdout); err == nil {
+		return services, nil
+	}
 	names, err := parseTableFormat(stdout, "NAME")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse services: %w", err)
@@ -532,6 +714,67 @@ func parseServices(stdout string) ([]interface{}, error) {
 	for _, name := range names {
 		services = append(services, state.ServiceInfo{Name: name})
 	}
+	return services, nil
+}
+
+// parseServiceTableFormat 解析 Service 的 wide 表格格式
+func parseServiceTableFormat(stdout string) ([]interface{}, error) {
+	lines := strings.Split(stdout, "\n")
+	var services []interface{}
+	headerFound := false
+	idx := map[string]int{}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		upper := strings.ToUpper(line)
+		if strings.Contains(upper, "NAME") && strings.Contains(upper, "TYPE") && !headerFound {
+			headerFound = true
+			fields := strings.Fields(line)
+			for i, h := range fields {
+				key := strings.ToLower(h)
+				switch key {
+				case "name":
+					idx["name"] = i
+				case "type":
+					idx["type"] = i
+				case "cluster-ip":
+					idx["cluster_ip"] = i
+				case "ports", "port(s)":
+					idx["ports"] = i
+				case "age":
+					idx["age"] = i
+				}
+			}
+			continue
+		}
+		if headerFound {
+			fields := strings.Fields(line)
+			var name, serviceType string
+			if v, ok := idx["name"]; ok && v < len(fields) {
+				name = fields[v]
+			} else if len(fields) > 0 {
+				name = fields[0]
+			}
+			if v, ok := idx["type"]; ok && v < len(fields) {
+				serviceType = fields[v]
+			}
+			svc := state.ServiceInfo{Name: name, Type: serviceType}
+			if v, ok := idx["cluster_ip"]; ok && v < len(fields) {
+				svc.ClusterIP = fields[v]
+			}
+			if v, ok := idx["ports"]; ok && v < len(fields) {
+				svc.Ports = fields[v]
+			}
+			services = append(services, svc)
+		}
+	}
+	if !headerFound {
+		return nil, fmt.Errorf("failed to parse service table format: header not found")
+	}
+
 	return services, nil
 }
 

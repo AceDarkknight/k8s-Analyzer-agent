@@ -26,7 +26,7 @@ func TestNewGatewayClient(t *testing.T) {
 		timeoutSeconds int
 		wantErr        bool
 	}{
-		{
+    {
 			name:           "valid client",
 			baseURL:        "http://localhost:8080",
 			authToken:      "test-token",
@@ -244,8 +244,8 @@ func TestGatewayClient_ListPods(t *testing.T) {
 		if req.Resource != "pods" {
 			t.Errorf("expected resource pods, got %s", req.Resource)
 		}
-		if req.Output != "json" {
-			t.Errorf("expected output json, got %s", req.Output)
+		if req.Output != "wide" {
+			t.Errorf("expected output wide, got %s", req.Output)
 		}
 		if req.Mode != "structured" {
 			t.Errorf("expected mode structured, got %s", req.Mode)
@@ -387,33 +387,33 @@ func TestGatewayClient_ConvenienceMethods(t *testing.T) {
 			expectedRes:  "pod",
 			expectedOut:  "",
 		},
-		{
-			name: "ListEvents",
-			method: func(c *GatewayClient, ctx context.Context) (*KubectlResponse, error) {
-				return c.ListEvents(ctx, "default")
-			},
-			expectedVerb: "get",
-			expectedRes:  "events",
-			expectedOut:  "json",
-		},
-		{
+        {
+            name: "ListEvents",
+            method: func(c *GatewayClient, ctx context.Context) (*KubectlResponse, error) {
+                return c.ListEvents(ctx, "default")
+            },
+            expectedVerb: "get",
+            expectedRes:  "events",
+            expectedOut:  "json",
+        },
+        {
 			name: "ListDeployments",
 			method: func(c *GatewayClient, ctx context.Context) (*KubectlResponse, error) {
 				return c.ListDeployments(ctx, "default")
 			},
 			expectedVerb: "get",
 			expectedRes:  "deployments",
-			expectedOut:  "json",
-		},
-		{
+            expectedOut:  "wide",
+        },
+        {
 			name: "ListNamespaces",
 			method: func(c *GatewayClient, ctx context.Context) (*KubectlResponse, error) {
 				return c.ListNamespaces(ctx)
 			},
 			expectedVerb: "get",
 			expectedRes:  "namespaces",
-			expectedOut:  "json",
-		},
+            expectedOut:  "wide",
+        },
 		{
 			name: "GetNodes",
 			method: func(c *GatewayClient, ctx context.Context) (*KubectlResponse, error) {
@@ -429,9 +429,9 @@ func TestGatewayClient_ConvenienceMethods(t *testing.T) {
 				return c.ListServices(ctx, "default")
 			},
 			expectedVerb: "get",
-			expectedRes:  "services",
-			expectedOut:  "json",
-		},
+            expectedRes:  "services",
+            expectedOut:  "wide",
+        },
 	}
 
 	for _, tt := range tests {

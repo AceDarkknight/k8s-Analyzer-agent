@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
@@ -300,12 +301,16 @@ func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *st
 			totalUsage.CompletionTokens += usage.CompletionTokens
 			totalUsage.TotalTokens += usage.TotalTokens
 			if r.recorder != nil {
-				r.recorder.Emit(trc.LLMTokenUsedEvent{
+				r.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
+					ModelType:        "power",
+					ModelName:        r.router.PowerModelName(),
 					Source:           "deep_query",
 					PromptTokens:     usage.PromptTokens,
 					CompletionTokens: usage.CompletionTokens,
 					TotalTokens:      usage.TotalTokens,
-				})
+					DurationMs:       0, // 每轮无独立计时
+					Timestamp:        time.Now().Format(time.RFC3339),
+				}})
 			}
 		}
 	}()

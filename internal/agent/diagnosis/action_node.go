@@ -252,8 +252,10 @@ func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc sta
 	req := &gateway.KubectlRequest{
 		Verb:     mapping.Verb,
 		Resource: mapping.Resource,
-		Output:   "json",
 		Mode:     "structured",
+	}
+	if output := defaultOutputForVerb(mapping.Verb); output != "" {
+		req.Output = output
 	}
 
 	// 从 Args 中提取参数
@@ -315,6 +317,14 @@ func (n *ActionNode) executeToolCall(ctx context.Context, s *state.State, tc sta
 	}
 
 	return summary, nil
+}
+
+func defaultOutputForVerb(verb string) string {
+	if verb == "get" {
+		return "json"
+	}
+
+	return ""
 }
 
 // executeSafeCommand 执行安全命令
