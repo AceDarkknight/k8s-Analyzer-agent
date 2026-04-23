@@ -40,7 +40,7 @@ store:
 
 # Agent 行为配置
 agent:
-  max_iterations: 10
+  max_iterations: 20
   compress_threshold: 4
   output_max_lines: 100
   output_max_chars: 6000

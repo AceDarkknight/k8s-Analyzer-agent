@@ -15,9 +15,9 @@ type TokenUsage struct {
 
 // LLMCallRecord 单次 LLM 调用记录
 type LLMCallRecord struct {
-	ModelType        string `json:"model_type"`         // "light" | "power"
-	ModelName        string `json:"model_name"`         // 实际使用的模型名称
-	Source           string `json:"source"`             // "decision" | "report" | "deep_query"
+	ModelType        string `json:"model_type"` // "light" | "power"
+	ModelName        string `json:"model_name"` // 实际使用的模型名称
+	Source           string `json:"source"`     // "decision" | "report" | "deep_query"
 	PromptTokens     int    `json:"prompt_tokens"`
 	CompletionTokens int    `json:"completion_tokens"`
 	TotalTokens      int    `json:"total_tokens"`

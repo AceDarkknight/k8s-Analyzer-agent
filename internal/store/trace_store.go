@@ -8,13 +8,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 type TraceStore interface {
+	// SaveTrace 保存完整 trace 并将索引记录写在 traces_index.jsonl 最前面
 	SaveTrace(ctx context.Context, trace *trc.TaskTrace) error
+	// CheckpointTrace 仅写入 trace 详情文件（不更新索引），用于每轮决策后的增量持久化
+	CheckpointTrace(ctx context.Context, trace *trc.TaskTrace) error
 	GetTrace(ctx context.Context, taskID string) (*trc.TaskTrace, error)
 	ListTraces(ctx context.Context, page, size int) ([]trc.TraceIndexRecord, int, error)
 	Close() error
@@ -39,6 +43,7 @@ func NewFileTraceStore(baseDir string) (*FileTraceStore, error) {
 	}, nil
 }
 
+// SaveTrace 写入 trace 详情文件，并将索引记录 prepend 到 traces_index.jsonl 最前面
 func (s *FileTraceStore) SaveTrace(ctx context.Context, trace *trc.TaskTrace) error {
 	if trace == nil {
 		return fmt.Errorf("trace is nil")
@@ -51,26 +56,61 @@ func (s *FileTraceStore) SaveTrace(ctx context.Context, trace *trc.TaskTrace) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	detailPath := filepath.Join(s.baseDir, trace.TaskID+".json")
-	detailBytes, err := json.MarshalIndent(trace, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal trace: %w", err)
+	// 写 detail 文件
+	if err := s.writeDetail(trace); err != nil {
+		return err
 	}
-	if err := os.WriteFile(detailPath, detailBytes, 0o644); err != nil {
-		return fmt.Errorf("write trace detail: %w", err)
-	}
+
+	// 将索引记录写在文件最前面
 	indexRecord := trc.BuildTraceIndex(trace)
 	line, err := json.Marshal(indexRecord)
 	if err != nil {
 		return fmt.Errorf("marshal trace index: %w", err)
 	}
-	f, err := os.OpenFile(s.indexFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open trace index: %w", err)
+	return s.prependIndex(line)
+}
+
+// CheckpointTrace 仅写入 trace 详情文件，不更新索引（用于每轮 DecisionNode 后的增量持久化）
+func (s *FileTraceStore) CheckpointTrace(ctx context.Context, trace *trc.TaskTrace) error {
+	if trace == nil || trace.TaskID == "" {
+		return nil
 	}
-	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		return fmt.Errorf("append trace index: %w", err)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writeDetail(trace)
+}
+
+// writeDetail 将 trace 序列化并写入 {taskID}.json（在持锁状态下调用）
+func (s *FileTraceStore) writeDetail(trace *trc.TaskTrace) error {
+	detailBytes, err := json.MarshalIndent(trace, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal trace: %w", err)
+	}
+	detailPath := filepath.Join(s.baseDir, trace.TaskID+".json")
+	if err := os.WriteFile(detailPath, detailBytes, 0o644); err != nil {
+		return fmt.Errorf("write trace detail: %w", err)
+	}
+	return nil
+}
+
+// prependIndex 将新行写在 traces_index.jsonl 文件最前面（在持锁状态下调用）
+func (s *FileTraceStore) prependIndex(line []byte) error {
+	existing, err := os.ReadFile(s.indexFile)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read trace index: %w", err)
+	}
+	// 新内容 = 新行 + 换行符 + 原有内容
+	newContent := make([]byte, 0, len(line)+1+len(existing))
+	newContent = append(newContent, line...)
+	newContent = append(newContent, '\n')
+	newContent = append(newContent, existing...)
+	if err := os.WriteFile(s.indexFile, newContent, 0o644); err != nil {
+		return fmt.Errorf("write trace index: %w", err)
 	}
 	return nil
 }
@@ -92,6 +132,7 @@ func (s *FileTraceStore) GetTrace(ctx context.Context, taskID string) (*trc.Task
 	return &trace, nil
 }
 
+// ListTraces 返回按时间戳降序排列的分页记录（兼容新旧两种索引文件格式）
 func (s *FileTraceStore) ListTraces(ctx context.Context, page, size int) ([]trc.TraceIndexRecord, int, error) {
 	if page <= 0 {
 		page = 1
@@ -112,6 +153,7 @@ func (s *FileTraceStore) ListTraces(ctx context.Context, page, size int) ([]trc.
 		return nil, 0, err
 	}
 	defer f.Close()
+
 	var records []trc.TraceIndexRecord
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -127,26 +169,22 @@ func (s *FileTraceStore) ListTraces(ctx context.Context, page, size int) ([]trc.
 	if err := scanner.Err(); err != nil {
 		return nil, 0, err
 	}
+
+	// 按时间戳降序排列，兼容旧格式（升序）和新格式（降序）混合文件
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Timestamp > records[j].Timestamp
+	})
+
 	total := len(records)
-	start := total - (page * size)
-	end := total - ((page - 1) * size)
-	if start < 0 {
-		start = 0
+	start := (page - 1) * size
+	if start >= total {
+		return []trc.TraceIndexRecord{}, total, nil
 	}
-	if end < 0 {
-		end = 0
-	}
-	if start > total {
-		start = total
-	}
+	end := start + size
 	if end > total {
 		end = total
 	}
-	result := make([]trc.TraceIndexRecord, 0, end-start)
-	for i := end - 1; i >= start; i-- {
-		result = append(result, records[i])
-	}
-	return result, total, nil
+	return records[start:end], total, nil
 }
 
 func (s *FileTraceStore) Close() error { return nil }

@@ -62,13 +62,15 @@ type toolCallDTO struct {
 }
 
 type reasoningStepDTO struct {
-	Iteration   int           `json:"iteration"`
-	Thought     string        `json:"thought"`
-	Decision    string        `json:"decision"`
-	ToolCalls   []toolCallDTO `json:"tool_calls,omitempty"`
-	Observation string        `json:"observation,omitempty"`
-	DurationMs  int64         `json:"duration_ms"`
-	TokensUsed  int           `json:"tokens_used"`
+	Iteration      int           `json:"iteration"`
+	Timestamp      string        `json:"timestamp,omitempty"`
+	Thought        string        `json:"thought"`
+	Decision       string        `json:"decision"`
+	DeepQueryTopic string        `json:"deep_query_topic,omitempty"`
+	ToolCalls      []toolCallDTO `json:"tool_calls,omitempty"`
+	Observation    string        `json:"observation,omitempty"`
+	DurationMs     int64         `json:"duration_ms"`
+	TokensUsed     int           `json:"tokens_used"`
 }
 
 type taskTraceDTO struct {
@@ -91,7 +93,10 @@ func normalizeStatus(status string) string {
 	switch strings.ToLower(status) {
 	case "completed", "success":
 		return "success"
-	case "partial", "failed", "error":
+	case "partial":
+		// partial 表示诊断达到迭代上限但仍产出了报告，属于部分完成，区别于真正失败
+		return "partial"
+	case "failed", "error":
 		return "failed"
 	default:
 		return status
@@ -163,13 +168,15 @@ func enrichReasoningSteps(steps []trc.TraceReasoningStep) []reasoningStepDTO {
 			})
 		}
 		result = append(result, reasoningStepDTO{
-			Iteration:   step.Iteration,
-			Thought:     step.Thought,
-			Decision:    step.Decision,
-			ToolCalls:   calls,
-			Observation: step.Observation,
-			DurationMs:  step.DurationMs,
-			TokensUsed:  step.TokensUsed,
+			Iteration:      step.Iteration,
+			Timestamp:      step.Timestamp,
+			Thought:        step.Thought,
+			Decision:       step.Decision,
+			DeepQueryTopic: step.DeepQueryTopic,
+			ToolCalls:      calls,
+			Observation:    step.Observation,
+			DurationMs:     step.DurationMs,
+			TokensUsed:     step.TokensUsed,
 		})
 	}
 	return result

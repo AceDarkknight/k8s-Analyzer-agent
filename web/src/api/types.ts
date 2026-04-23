@@ -64,7 +64,7 @@ export interface TaskTrace {
   task_id: string;
   timestamp: string;
   user_input: string;
-  status: 'success' | 'failed';
+  status: 'success' | 'failed' | 'partial';
   total_duration_ms: number;
   token_usage: TokenUsage;
   llm_calls: LLMCallRecord[];
@@ -81,7 +81,7 @@ export interface TaskIndexRecord {
   task_id: string;
   timestamp: string;
   user_input: string;
-  status: 'success' | 'failed';
+  status: 'success' | 'failed' | 'partial';
   total_duration_ms: number;
   total_tokens: number;
   prompt_tokens: number;

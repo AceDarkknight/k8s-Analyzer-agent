@@ -58,7 +58,23 @@ func NewAgent(
 	// 3. 创建 Graph（验证迭代逻辑内置于 Graph.Run 中）
 	graph := NewGraph(infoNode, decisionNode, actionNode, compressNode, reportNode, skillLoader, cfg.VerifyRecommendations, cfg.MaxVerifyIterations, recorder)
 
-	// 4. 返回 Agent
+	// 4. 设置增量 checkpoint：每轮 DecisionNode 完成后将当前 trace 快照写入文件
+	//    进程意外退出时可保留已完成的轮次数据，status 标记为 "running"
+	if traceStore != nil {
+		graph.SetCheckpointFn(func(ctx context.Context, s *state.State) {
+			draft := recorder.Snapshot()
+			trace := trc.BuildTaskTrace(draft, s)
+			if trace == nil {
+				return
+			}
+			trace.Status = "running"
+			if err := traceStore.CheckpointTrace(ctx, trace); err != nil {
+				logger.Warn("Agent: checkpoint trace failed", logger.Err(err))
+			}
+		})
+	}
+
+	// 5. 返回 Agent
 	return &Agent{
 		graph:      graph,
 		cfg:        cfg,

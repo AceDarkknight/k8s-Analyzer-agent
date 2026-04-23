@@ -27,6 +27,7 @@ type Graph struct {
 	verifyEnabled       bool
 	maxVerifyIterations int
 	recorder            *trc.TaskRecorder
+	checkpointFn        func(context.Context, *state.State) // 每轮 DecisionNode 完成后的增量持久化回调
 }
 
 // NewGraph 创建 Graph
@@ -49,6 +50,19 @@ func (g *Graph) Recorder() *trc.TaskRecorder {
 		return nil
 	}
 	return g.recorder
+}
+
+// SetCheckpointFn 设置每轮 DecisionNode 完成后的增量持久化回调
+func (g *Graph) SetCheckpointFn(fn func(context.Context, *state.State)) {
+	g.checkpointFn = fn
+}
+
+// doCheckpoint 调用增量持久化回调（若未设置则跳过）
+func (g *Graph) doCheckpoint(ctx context.Context, s *state.State) {
+	if g.checkpointFn == nil {
+		return
+	}
+	g.checkpointFn(ctx, s)
 }
 
 // Run 执行诊断流程
@@ -127,6 +141,8 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 				}
 			}
 			logger.Info("Graph: DecisionNode completed", logger.String("decision", decisionOutput.Decision))
+			// 每轮 DecisionNode 完成后增量持久化 trace
+			g.doCheckpoint(ctx, state)
 
 			if !state.VerifyPhase && !state.HasActiveSkill() && decisionOutput.Decision == "use_skill" {
 				skillName := decisionOutput.SkillName
@@ -228,6 +244,8 @@ func (g *Graph) Run(ctx context.Context, s *state.State) (*state.State, error) {
 					break
 				}
 				logger.Info("Graph: DecisionNode (verify) completed", logger.String("decision", decisionOutput.Decision))
+				// 验证阶段每轮 DecisionNode 完成后也做增量持久化
+				g.doCheckpoint(ctx, state)
 
 				// b. 如果 decision == "report" → 跳出验证循环
 				if decisionOutput.Decision == "report" {

@@ -23,6 +23,7 @@ import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  ExclamationCircleOutlined,
   CopyOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -505,6 +506,8 @@ export default function TaskDetail() {
               </Title>
               {trace.status === 'success' ? (
                 <Tag icon={<CheckCircleOutlined />} color="success">成功</Tag>
+              ) : trace.status === 'partial' ? (
+                <Tag icon={<ExclamationCircleOutlined />} color="warning">部分完成</Tag>
               ) : (
                 <Tag icon={<CloseCircleOutlined />} color="error">失败</Tag>
               )}

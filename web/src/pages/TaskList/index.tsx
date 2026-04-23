@@ -11,7 +11,14 @@ const { Title } = Typography;
 
 const statusColorMap: Record<string, string> = {
   success: 'green',
+  partial: 'gold',
   failed: 'red',
+};
+
+const statusLabelMap: Record<string, string> = {
+  success: '成功',
+  partial: '部分完成',
+  failed: '失败',
 };
 
 export default function TaskList() {
@@ -61,7 +68,7 @@ export default function TaskList() {
       width: 100,
       render: (v: string) => (
         <Tag color={statusColorMap[v] ?? 'default'}>
-          {v === 'success' ? '成功' : v === 'failed' ? '失败' : v}
+          {statusLabelMap[v] ?? v}
         </Tag>
       ),
     },
