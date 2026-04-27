@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"encoding/json"
 	"sort"
 	"time"
 
@@ -203,27 +204,62 @@ func enrichStepsWithExecutions(steps []TraceReasoningStep, executions []TraceToo
 		if len(iterExecs) == 0 || len(step.ToolCalls) == 0 {
 			continue
 		}
-		// 按工具名分组，处理同一轮中多次调用同名工具的情况
-		execsByName := make(map[string][]TraceToolExecution)
-		for _, exec := range iterExecs {
-			execsByName[exec.ToolName] = append(execsByName[exec.ToolName], exec)
-		}
-		usedIdx := make(map[string]int)
+		used := make([]bool, len(iterExecs))
 		for ti := range step.ToolCalls {
 			tc := &step.ToolCalls[ti]
-			execs := execsByName[tc.ToolName]
-			idx := usedIdx[tc.ToolName]
-			if idx < len(execs) {
-				exec := execs[idx]
-				tc.Success = exec.Success
-				tc.DurationMs = exec.DurationMs
-				tc.Output = exec.Output
-				tc.Timestamp = exec.Timestamp
-				tc.Cached = exec.Cached
-				usedIdx[tc.ToolName] = idx + 1
+			matchIdx := findExecutionMatch(*tc, iterExecs, used)
+			if matchIdx == -1 {
+				continue
 			}
+			exec := iterExecs[matchIdx]
+			used[matchIdx] = true
+			tc.Success = exec.Success
+			tc.DurationMs = exec.DurationMs
+			tc.Output = exec.Output
+			tc.Timestamp = exec.Timestamp
+			tc.Cached = exec.Cached
 		}
 	}
+}
+
+func findExecutionMatch(tc TraceToolCallDetail, executions []TraceToolExecution, used []bool) int {
+	for i, exec := range executions {
+		if used[i] {
+			continue
+		}
+		if exec.ToolName != tc.ToolName {
+			continue
+		}
+		if traceArgsEqual(tc.Args, exec.Args) {
+			return i
+		}
+	}
+
+	for i, exec := range executions {
+		if used[i] {
+			continue
+		}
+		if exec.ToolName == tc.ToolName {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func traceArgsEqual(left, right map[string]interface{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftBytes, err := json.Marshal(left)
+	if err != nil {
+		return false
+	}
+	rightBytes, err := json.Marshal(right)
+	if err != nil {
+		return false
+	}
+	return string(leftBytes) == string(rightBytes)
 }
 
 func BuildTraceIndex(trace *TaskTrace) TraceIndexRecord {

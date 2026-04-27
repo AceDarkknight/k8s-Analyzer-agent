@@ -16,31 +16,29 @@ const verifyPhaseHeader = `
 `
 
 // 可用工具列表
-const defaultToolsList = `### 基础查询
+const defaultToolsList = `### K8s 资源查询
 - list_pods: 列出 Pod 列表。参数: namespace, labelSelector
-- describe_pod: 查看 Pod 详情（包含 resources.requests/limits）。参数: namespace, name
+- describe_pod: 查看 Pod 详情。参数: namespace, name
 - get_pod_logs: 获取 Pod 日志。参数: namespace, name, container, tailLines
-
-### 节点查询
 - get_nodes: 查看节点列表。无参数
-- describe_node: 查看节点详情。参数: name
-  → **包含 Allocatable 和 Allocated resources（用于计算剩余 CPU/Memory）**
-  → 当 Pending 原因是 Insufficient cpu/memory 时必须使用
-
-### 事件查询（重要）
+- describe_node: 查看节点详情（含 Allocatable/Allocated resources）。参数: name
 - get_pod_events: 获取指定 Pod 的事件。参数: namespace, podName
-  → 用于 Pending Pod 找 FailedScheduling 原因
-  → 用于 CrashLoopBackOff 找 BackOff 事件
 - list_events: 列出命名空间所有事件。参数: namespace
-
-### 资源查询
 - list_pvc: 检查 PVC 绑定状态。参数: namespace
 - list_deployments: 列出 Deployments。参数: namespace
 - list_services: 列出 Services。参数: namespace
 - list_namespaces: 列出命名空间。无参数
 
-### 系统命令
-- execute_safe_command: 在节点执行 Shell 命令（需安全审计）。参数: command, reason`
+### 主机级诊断（Shell 命令）
+- execute_safe_command: 在集群节点执行 Shell 命令（需安全审计）。参数: command, reason
+  → 当需要 K8s API 无法直接提供的主机级数据时使用
+  → 典型命令：
+    - 实时资源: top -bn1 | head -20, free -h, df -h
+    - 系统日志: journalctl -xeu kubelet --no-pager | tail -50
+    - 容器运行时: crictl ps, crictl inspect <container-id>
+    - 网络诊断: curl -s http://<ip>:<port>/healthz, ss -tlnp
+    - 进程: ps aux | grep <keyword>
+  → reason 字段必须说明执行目的`
 
 // DecisionPrompt 模板
 const decisionPromptTemplate = `你是 Kubernetes 集群诊断专家。你的职责是自主分析问题并选择合适的工具进行调查。
@@ -70,21 +68,31 @@ const decisionPromptTemplate = `你是 Kubernetes 集群诊断专家。你的职
 ## 可用工具
 {tools_list}
 
-## 诊断思路（根据 Pod 状态选择工具）
+## 诊断思路参考（根据问题类型选择工具组合）
 
-| Pod 状态 | 必须执行的工具 | 目标 |
-|---------|--------------|------|
-| Pending (Insufficient cpu/memory) | get_pod_events + describe_node + describe_pod | 找到调度失败原因，计算节点剩余资源，给出合适的 requests 配置建议 |
-| Pending (其他原因) | get_pod_events + list_pvc | 找到 FailedScheduling 具体原因 |
-| CrashLoopBackOff | get_pod_logs + get_pod_events | 找到崩溃错误信息 |
-| ImagePullBackOff | describe_pod | 找到镜像拉取失败原因 |
-| OOMKilled | describe_pod + get_pod_logs | 找到内存耗尽原因 |
+| 问题类型 | 推荐工具组合 | 诊断目标 |
+|---------|-------------|---------|
+| Pod 调度失败(Pending) | get_pod_events, describe_node, describe_pod | 定位 FailedScheduling 原因，计算节点剩余资源 |
+| Pod 崩溃重启(CrashLoopBackOff) | get_pod_logs, get_pod_events, describe_pod | 找到崩溃错误日志、BackOff 事件和容器退出码 |
+| 镜像拉取失败(ImagePullBackOff) | get_pod_events, describe_pod, execute_safe_command | 通过事件找到拉取失败原因，用 crictl/curl 验证镜像仓库连通性 |
+| 内存溢出(OOMKilled) | describe_pod, get_pod_logs, get_pod_events | 确认 limits 配置、分析内存使用模式和 OOM 事件 |
+| 系统组件异常 | get_pod_logs, get_pod_events, execute_safe_command | 结合 K8s 日志和 journalctl 系统日志定位根因 |
+| Pod 被驱逐(Evicted/Unknown) | list_events, describe_node, execute_safe_command | 检查节点磁盘/内存压力和驱逐事件 |
+| 节点资源异常 | describe_node, list_pods, execute_safe_command | 对比 K8s Allocatable/Allocated 和主机实际资源 |
 
-### 资源计算指引（Insufficient cpu/memory 时使用）
-1. 用 describe_node 获取节点的 Allocatable 和 Allocated resources
-2. 用 describe_pod 获取 Pending Pod 的 requests
-3. 计算: 剩余资源 = Allocatable - Allocated
-4. 给出建议: 如果 Pod requests > 剩余资源，建议调整 requests 为剩余资源的 80%
+上表为参考，你可以根据实际诊断进展自主组合工具，**但必须遵循以下工具选择原则**。
+
+## 工具选择原则（重要）
+K8s API 工具（describe/get/logs/events）只能看到**声明式状态**，而 execute_safe_command 能获取**主机实际运行时数据**。二者互补，缺一不可。
+
+**判断何时使用 execute_safe_command 的通用规则：**
+- 当你需要的信息是 K8s API 无法直接提供的（如实际 CPU/内存/磁盘使用率、系统日志、容器运行时状态、网络连通性），就应该使用 execute_safe_command
+- 当 K8s API 返回的数据不足以解释问题根因（如 Pod 反复重启但日志无明显错误），就应该通过 execute_safe_command 收集主机级证据
+- 当需要验证 K8s 声明的状态是否与主机实际情况一致（如 K8s 报告资源不足，需要 top/free 确认真实使用量）
+
+**自检规则：在你准备 decision=report 之前，回顾一下你是否已经同时使用了 K8s API 工具和 execute_safe_command。如果整个诊断过程完全没有调用过 execute_safe_command，请反思是否遗漏了主机级数据采集——除非问题纯粹是 K8s 配置层面的（如 label 不匹配、RBAC 权限），否则几乎都需要主机级数据辅助定位。**
+
+- 如果 execute_safe_command 执行失败，在下一轮 thought 中说明失败原因，尝试换一个更简单的命令重试，不要因此完全放弃主机级诊断
 
 ## 输出格式（严格 JSON，请直接输出纯 JSON 文本，严禁使用 Markdown 代码块包裹）
 {
@@ -192,6 +200,7 @@ const verifyDecisionPromptTemplate = `你是一个 Kubernetes 诊断专家，当
 - 使用上面「异常 Pod 列表」中的命名空间和 Pod 名，不要用复合命令查找
 - tool_calls 的参数必须指向清单中明确提到的资源（命名空间、Pod 名、资源类型）
 - **如果异常 Pod 是 Pending 且原因是 Insufficient cpu/memory，必须调用 describe_node(name="上面节点列表中的节点名") 获取节点资源详情**
+- 验证阶段可使用 execute_safe_command 在主机上执行命令，获取实时数据作为验证证据（如系统日志、资源占用、网络连通性等）
 - 每轮最多 2 个 tool_calls
 - 如果清单中的疑点已基本验证完毕，或已达到最大验证轮数，必须 decision=report
 

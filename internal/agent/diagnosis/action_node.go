@@ -372,15 +372,27 @@ func (n *ActionNode) executeSafeCommand(ctx context.Context, s *state.State, tc 
 	if output == "" {
 		output = result.Stderr
 	}
+	success := result.ExitCode == 0 && !result.IsError
 	summary := n.summarizer.Summarize(output)
-	execRecord := state.CommandExecution{Command: command, ToolName: tc.Name, Args: tc.Args, Success: result.ExitCode == 0, Output: summary, DurationMs: time.Since(startTime).Milliseconds(), Timestamp: time.Now(), IsVerifyPhase: s.VerifyPhase, Cached: false}
+	displayOutput := ensureCommandObservation(summary, success)
+	execRecord := state.CommandExecution{Command: command, ToolName: tc.Name, Args: tc.Args, Success: success, Output: displayOutput, DurationMs: time.Since(startTime).Milliseconds(), Timestamp: time.Now(), IsVerifyPhase: s.VerifyPhase, Cached: false}
 	s.AddCommandExecutionRecord(execRecord)
 	if n.recorder != nil {
-		n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: execRecord.Success, Output: summary, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: false, Command: command}})
+		n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: execRecord.Success, Output: displayOutput, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: false, Command: command}})
 	}
 	metrics.RecordToolCall(tc.Name, execRecord.Success)
 
-	return summary, nil
+	return displayOutput, nil
+}
+
+func ensureCommandObservation(summary string, success bool) string {
+	if strings.TrimSpace(summary) != "" {
+		return summary
+	}
+	if success {
+		return "命令已执行成功，但未返回可展示的文本输出"
+	}
+	return "命令执行失败，但未返回可展示的文本输出"
 }
 
 // executeDeepQuery 执行 deep_query 模式

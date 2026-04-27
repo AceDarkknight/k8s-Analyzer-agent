@@ -57,3 +57,74 @@ func TestBuildTaskTraceAndIndex(t *testing.T) {
 		t.Fatalf("unexpected index: %+v", idx)
 	}
 }
+
+func TestBuildTaskTrace_EnrichStepsWithExecutions_MatchesSameToolByArgs(t *testing.T) {
+	draft := &TaskTraceDraft{
+		TaskID:    "task-2",
+		StartedAt: time.Unix(200, 0),
+		FinishedAt: time.Unix(260, 0),
+		UserInput: "诊断一下这个集群",
+		ToolExecutions: []TraceToolExecution{
+			{
+				ToolName:  "execute_safe_command",
+				Iteration: 1,
+				Args: map[string]interface{}{
+					"command": "df -h",
+				},
+				Success:   true,
+				Output:    "disk output",
+				Timestamp: "2026-04-27T11:00:01+08:00",
+			},
+			{
+				ToolName:  "execute_safe_command",
+				Iteration: 1,
+				Args: map[string]interface{}{
+					"command": "free -h",
+				},
+				Success:   true,
+				Output:    "memory output",
+				Timestamp: "2026-04-27T11:00:00+08:00",
+			},
+		},
+		ReasoningSteps: map[int]TraceReasoningStep{
+			1: {
+				Iteration: 1,
+				Timestamp: "2026-04-27T11:00:00+08:00",
+				Thought:   "检查资源",
+				Decision:  "execute_plan",
+				ToolCalls: []TraceToolCallDetail{
+					{
+						ToolName: "execute_safe_command",
+						Args: map[string]interface{}{
+							"command": "free -h",
+						},
+					},
+					{
+						ToolName: "execute_safe_command",
+						Args: map[string]interface{}{
+							"command": "df -h",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	trace := BuildTaskTrace(draft, nil)
+	if trace == nil {
+		t.Fatal("expected trace")
+	}
+	if len(trace.ReasoningHistory) != 1 {
+		t.Fatalf("unexpected reasoning history length: %d", len(trace.ReasoningHistory))
+	}
+	toolCalls := trace.ReasoningHistory[0].ToolCalls
+	if len(toolCalls) != 2 {
+		t.Fatalf("unexpected tool call length: %d", len(toolCalls))
+	}
+	if toolCalls[0].Output != "memory output" {
+		t.Fatalf("expected first tool call output to match free -h, got %q", toolCalls[0].Output)
+	}
+	if toolCalls[1].Output != "disk output" {
+		t.Fatalf("expected second tool call output to match df -h, got %q", toolCalls[1].Output)
+	}
+}

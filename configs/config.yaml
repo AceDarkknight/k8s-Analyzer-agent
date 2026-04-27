@@ -11,6 +11,7 @@ shell_mcp:
   server_url: "${SHELL_MCP_URL}"
   transport: "sse"
   auth_token: "${SHELL_MCP_TOKEN}"
+  timeout_seconds: 30
 
 # LLM 配置
 llm:
@@ -18,7 +19,7 @@ llm:
     provider: "openrouter"
     base_url: "https://openrouter.ai/api/v1"
     api_key: "${OPENAI_API_KEY}"
-    model: "minimax/minimax-m2.5"
+    model: "deepseek/deepseek-v4-flash"
     temperature: 0.1
     max_tokens: 128000
   power:

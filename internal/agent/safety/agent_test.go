@@ -561,3 +561,36 @@ func TestExecuteSafeCommand_MultipleNodes(t *testing.T) {
 		t.Errorf("expected exit code 0, got %d", result.ExitCode)
 	}
 }
+
+func TestExecuteSafeCommand_ExecutionMarkedErrorSetsNonZeroExitCode(t *testing.T) {
+	rules, err := NewRuleEngineFromConfig(
+		[]string{"kubectl get"},
+		[]string{},
+	)
+	if err != nil {
+		t.Fatalf("failed to create rule engine: %v", err)
+	}
+
+	mockExec := &mockCommandExecutor{
+		result: mockExecuteResult("permission denied", true),
+	}
+
+	agent := NewSafetyAgent(rules, nil, mockExec)
+
+	req := &CommandRequest{
+		Command: "kubectl get pods",
+		Reason:  "查看 pod",
+	}
+
+	result, err := agent.ExecuteSafeCommand(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.ExitCode == 0 {
+		t.Fatalf("expected non-zero exit code when execute result is marked error")
+	}
+	if !result.IsError {
+		t.Fatalf("expected IsError to remain true")
+	}
+}

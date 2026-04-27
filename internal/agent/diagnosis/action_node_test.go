@@ -208,3 +208,39 @@ func TestDefaultOutputForVerb(t *testing.T) {
 		})
 	}
 }
+
+func TestEnsureCommandObservation(t *testing.T) {
+	tests := []struct {
+		name    string
+		summary string
+		success bool
+		want    string
+	}{
+		{
+			name:    "preserve non-empty summary",
+			summary: "Mem: 1Gi used",
+			success: true,
+			want:    "Mem: 1Gi used",
+		},
+		{
+			name:    "success fallback when empty",
+			summary: "   ",
+			success: true,
+			want:    "命令已执行成功，但未返回可展示的文本输出",
+		},
+		{
+			name:    "failure fallback when empty",
+			summary: "",
+			success: false,
+			want:    "命令执行失败，但未返回可展示的文本输出",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ensureCommandObservation(tt.summary, tt.success); got != tt.want {
+				t.Fatalf("ensureCommandObservation() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
