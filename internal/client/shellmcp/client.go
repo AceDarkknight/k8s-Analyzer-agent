@@ -3,18 +3,26 @@ package shellmcp
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"path"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/AceDarkknight/shell-executor-mcp/pkg/configs"
 	"github.com/AceDarkknight/shell-executor-mcp/pkg/mcpclient"
 )
 
-// ShellMCPClient Shell MCP 客户端
+// ShellMCPClient Shell MCP 客户端（懒连接模式）
 type ShellMCPClient struct {
-	client    *mcpclient.Client
-	serverURL string
-	authToken string
-	connected bool
+	mu             sync.Mutex
+	client         *mcpclient.Client
+	serverURL      string
+	authToken      string
+	connected      bool
+	timeoutSeconds int // 命令执行超时（秒）
+	insecureSkipTLS bool
 }
 
 // ExecuteResult 执行结果
@@ -39,19 +47,71 @@ type ToolInfo struct {
 	Description string
 }
 
-// NewShellMCPClient 创建 ShellMCPClient 实例（不立即连接）
-func NewShellMCPClient(serverURL, authToken string) *ShellMCPClient {
-	return &ShellMCPClient{
-		serverURL: serverURL,
-		authToken: authToken,
-		connected: false,
+// NewShellMCPClient 创建 ShellMCPClient 实例（不立即连接，首次执行命令时自动连接）
+func NewShellMCPClient(serverURL, authToken string, timeoutSeconds int) *ShellMCPClient {
+	return NewShellMCPClientWithOptions(serverURL, authToken, timeoutSeconds, false)
+}
+
+// NewShellMCPClientWithOptions 创建带可选配置的 ShellMCPClient
+func NewShellMCPClientWithOptions(serverURL, authToken string, timeoutSeconds int, insecureSkipVerify bool) *ShellMCPClient {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 30
 	}
+	return &ShellMCPClient{
+		serverURL:       normalizeEndpointURL(serverURL),
+		authToken:       authToken,
+		connected:       false,
+		timeoutSeconds:  timeoutSeconds,
+		insecureSkipTLS: insecureSkipVerify,
+	}
+}
+
+func normalizeEndpointURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return raw
+	}
+
+	cleanPath := strings.TrimSpace(parsed.Path)
+	switch cleanPath {
+	case "", "/":
+		parsed.Path = "/mcp"
+	default:
+		if !strings.HasSuffix(cleanPath, "/mcp") {
+			parsed.Path = path.Join(cleanPath, "mcp")
+		}
+	}
+
+	if parsed.Path == "" {
+		parsed.Path = "/mcp"
+	}
+
+	return parsed.String()
 }
 
 // Connect 建立到 MCP 服务器的连接
 func (c *ShellMCPClient) Connect(ctx context.Context) error {
-	if c.connected {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connectLocked(ctx)
+}
+
+// connectLocked 在持有锁的情况下建立连接（内部方法）
+func (c *ShellMCPClient) connectLocked(ctx context.Context) error {
+	if c.connected && c.client != nil {
 		return nil
+	}
+
+	// 先关闭旧连接（如果有）
+	if c.client != nil {
+		c.client.Close()
+		c.client = nil
+		c.connected = false
 	}
 
 	// 创建客户端配置
@@ -63,17 +123,31 @@ func (c *ShellMCPClient) Connect(ctx context.Context) error {
 				URL:  c.serverURL,
 			},
 		},
+		InsecureSkipVerify: c.insecureSkipTLS,
 	}
 
 	// 创建客户端
-	client, err := mcpclient.NewClient(cfg, mcpclient.WithLogger(logger.GetLogger().Sugar()))
+	opts := []mcpclient.Option{
+		mcpclient.WithLogger(logger.GetLogger().Sugar()),
+		mcpclient.WithTimeout(time.Duration(c.timeoutSeconds) * time.Second),
+	}
+	if strings.TrimSpace(c.authToken) != "" {
+		opts = append(opts, mcpclient.WithHeader("X-Cluster-Token", c.authToken))
+	}
+	if c.insecureSkipTLS {
+		opts = append(opts, mcpclient.WithInsecureSkipVerify())
+	}
+	client, err := mcpclient.NewClient(cfg, opts...)
 	if err != nil {
 		logger.Error("failed to create shell MCP client", logger.Err(err))
 		return fmt.Errorf("failed to create shell MCP client: %w", err)
 	}
 
-	// 连接服务器
-	if err := client.Connect(ctx); err != nil {
+	// 使用带超时的 context 连接
+	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if err := client.Connect(connectCtx); err != nil {
 		logger.Error("failed to connect to shell MCP server", logger.Err(err))
 		return fmt.Errorf("failed to connect to shell MCP server: %w", err)
 	}
@@ -84,13 +158,33 @@ func (c *ShellMCPClient) Connect(ctx context.Context) error {
 	return nil
 }
 
+// reconnect 关闭旧连接并重新建立连接
+func (c *ShellMCPClient) reconnect(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 强制关闭旧连接
+	if c.client != nil {
+		c.client.Close()
+		c.client = nil
+		c.connected = false
+	}
+
+	logger.Info("reconnecting to shell MCP server", logger.String("url", c.serverURL))
+	return c.connectLocked(ctx)
+}
+
 // Close 关闭 MCP 连接
 func (c *ShellMCPClient) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if !c.connected || c.client == nil {
 		return nil
 	}
 
 	c.client.Close()
+	c.client = nil
 	c.connected = false
 	logger.Info("closed shell MCP connection")
 	return nil
@@ -98,19 +192,53 @@ func (c *ShellMCPClient) Close() error {
 
 // IsConnected 返回连接状态
 func (c *ShellMCPClient) IsConnected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.connected
 }
 
-// ExecuteCommand 执行命令
+// connectionErrorPatterns 连接相关错误的匹配模式（包级常量，避免每次调用分配）
+var connectionErrorPatterns = []string{
+	"eof", "broken pipe", "connection reset", "connection refused",
+	"connection closed", "connection attempt failed", "wsarecv",
+	"stream closed", "i/o timeout", "timeout", "context deadline exceeded",
+	"session is closed", "not connected", "failed to respond",
+}
+
+// isConnectionError 检查是否为连接相关错误
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	for _, p := range connectionErrorPatterns {
+		if strings.Contains(errStr, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ExecuteCommand 执行命令（自动懒连接 + 失败重连）
 func (c *ShellMCPClient) ExecuteCommand(ctx context.Context, command string) (*ExecuteResult, error) {
-	if !c.connected || c.client == nil {
-		return nil, fmt.Errorf("not connected to shell MCP server")
+	// 懒连接：首次调用时自动建立连接
+	if err := c.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("lazy connect failed: %w", err)
 	}
 
-	result, err := c.client.ExecuteCommand(ctx, command)
+	// 为命令执行设置超时
+	execCtx, cancel := context.WithTimeout(ctx, time.Duration(c.timeoutSeconds)*time.Second)
+	defer cancel()
+
+	result, err := c.executeWithRetry(execCtx, command)
 	if err != nil {
-		logger.Error("failed to execute command", logger.Err(err), logger.String("command", command))
-		return nil, fmt.Errorf("failed to execute command: %w", err)
+		if execCtx.Err() == context.DeadlineExceeded {
+			logger.Error("command execution timed out",
+				logger.String("command", command),
+				logger.Int("timeout_seconds", c.timeoutSeconds))
+			return nil, fmt.Errorf("command execution timed out after %ds: %s", c.timeoutSeconds, command)
+		}
+		return nil, err
 	}
 
 	// 获取文本内容
@@ -119,12 +247,69 @@ func (c *ShellMCPClient) ExecuteCommand(ctx context.Context, command string) (*E
 	for _, content := range contents {
 		output += content + "\n"
 	}
+	if strings.TrimSpace(output) == "" {
+		fallback := strings.TrimSpace(result.String())
+		if fallback != "" {
+			output = fallback + "\n"
+		}
+	}
 
 	return &ExecuteResult{
 		Summary: result.String(),
 		Output:  output,
 		IsError: result.IsError,
 	}, nil
+}
+
+// executeWithRetry 执行命令，连接错误时主动重连重试一次
+func (c *ShellMCPClient) executeWithRetry(ctx context.Context, command string) (*mcpclient.Result, error) {
+	c.mu.Lock()
+	client := c.client
+	c.mu.Unlock()
+
+	if client == nil {
+		return nil, fmt.Errorf("not connected to shell MCP server")
+	}
+
+	result, err := client.ExecuteCommand(ctx, command)
+	if err == nil {
+		return result, nil
+	}
+
+	// 检查是否为连接错误，如果是则重连重试
+	if !isConnectionError(err) {
+		logger.Error("failed to execute command (non-connection error)",
+			logger.Err(err), logger.String("command", command))
+		return nil, fmt.Errorf("failed to execute command: %w", err)
+	}
+
+	logger.Warn("command failed with connection error, attempting reconnect",
+		logger.Err(err), logger.String("command", command))
+
+	// 重连：使用独立的 context，不受原命令超时限制
+	reconnCtx, reconnCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer reconnCancel()
+	if reconnErr := c.reconnect(reconnCtx); reconnErr != nil {
+		logger.Error("reconnect failed", logger.Err(reconnErr))
+		return nil, fmt.Errorf("reconnect failed after connection error: %w (original: %v)", reconnErr, err)
+	}
+
+	// 重连成功，用新的超时 context 重试命令
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Duration(c.timeoutSeconds)*time.Second)
+	defer retryCancel()
+
+	c.mu.Lock()
+	client = c.client
+	c.mu.Unlock()
+
+	result, err = client.ExecuteCommand(retryCtx, command)
+	if err != nil {
+		logger.Error("failed to execute command after reconnect",
+			logger.Err(err), logger.String("command", command))
+		return nil, fmt.Errorf("failed to execute command after reconnect: %w", err)
+	}
+
+	return result, nil
 }
 
 // ListTools 获取可用工具列表

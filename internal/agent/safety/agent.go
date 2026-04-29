@@ -255,11 +255,21 @@ func (a *SafetyAgent) executeCommand(ctx context.Context, req *CommandRequest, a
 	return &CommandResult{
 		Stdout:    execResult.Output,
 		Stderr:    "",
-		ExitCode:  0,
+		ExitCode:  exitCodeFromExecuteResult(execResult),
 		AuditInfo: auditInfo,
 		Output:    execResult.Output,
 		IsError:   execResult.IsError,
 	}, nil
+}
+
+func exitCodeFromExecuteResult(result *shellmcp.ExecuteResult) int {
+	if result == nil {
+		return 1
+	}
+	if result.IsError {
+		return 1
+	}
+	return 0
 }
 
 // ExecuteSimple is a simplified command execution (returns output string or error description)

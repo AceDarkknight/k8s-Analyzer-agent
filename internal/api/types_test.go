@@ -33,6 +33,7 @@ func TestToTaskListData(t *testing.T) {
 }
 
 func TestEnrichReasoningSteps(t *testing.T) {
+	// 已由 BuildTaskTrace 回填的推理步骤（工具调用已含执行结果）
 	steps := []trc.TraceReasoningStep{{
 		Iteration:   1,
 		Thought:     "先看 Pod",
@@ -40,20 +41,21 @@ func TestEnrichReasoningSteps(t *testing.T) {
 		Observation: "已看到 1 个 Pod",
 		DurationMs:  100,
 		TokensUsed:  5,
-		ToolCalls:   []state.ToolCall{{Name: "list_pods", Args: map[string]interface{}{"namespace": "default"}}},
+		ToolCalls: []trc.TraceToolCallDetail{{
+			ToolName:   "list_pods",
+			Args:       map[string]interface{}{"namespace": "default"},
+			Success:    true,
+			Output:     "pod-a",
+			DurationMs: 88,
+			Timestamp:  "2026-04-16T18:00:00+08:00",
+		}},
 	}}
-	execs := []trc.TraceToolExecution{{
-		ToolName:   "list_pods",
-		Iteration:  1,
-		Success:    true,
-		Output:     "pod-a",
-		DurationMs: 88,
-		Timestamp:  "2026-04-16T18:00:00+08:00",
-	}}
-	got := enrichReasoningSteps(steps, execs)
+	got := enrichReasoningSteps(steps)
 	require.Len(t, got, 1)
 	require.Len(t, got[0].ToolCalls, 1)
 	require.Equal(t, "pod-a", got[0].ToolCalls[0].Output)
+	require.Equal(t, int64(88), got[0].ToolCalls[0].DurationMs)
+	require.True(t, got[0].ToolCalls[0].Success)
 }
 
 func TestRenderAnalysisResult(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 )
@@ -172,10 +173,11 @@ func ParseAnalysisResponse(content string) (*state.AnalysisResult, error) {
 	// 转换 findings
 	for _, f := range parsed.Findings {
 		result.Findings = append(result.Findings, state.Finding{
-			Resource: f.Resource,
-			Severity: f.Severity,
-			Message:  f.Message,
-			Evidence: f.Evidence,
+			Resource:  f.Resource,
+			Severity:  f.Severity,
+			Message:   f.Message,
+			Evidence:  f.Evidence,
+			Timestamp: time.Now(),
 		})
 	}
 

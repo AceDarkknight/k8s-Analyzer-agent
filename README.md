@@ -1,132 +1,160 @@
 # K8s Analyzer Agent
 
-这是一个基于 Eino 框架 (Golang) 开发的智能分析 Agent，旨在通过集成 MCP (Model Context Protocol) 工具，实现 K8s 集群状态的自动感知、安全诊断与智能分析。
+一个基于 Eino / Go 的 K8s 自动诊断 Agent。
 
-## 项目背景
+## 项目概述
 
-随着 Kubernetes 集群规模的增长，运维复杂度显著提升。排查问题往往涉及查看多个资源状态、执行诊断命令以及综合分析日志。本项目旨在解决这一痛点，通过智能 Agent 自动化执行这些步骤，提供包含根因分析与修复建议的报告。
+本项目通过多 Agent 协作完成 Kubernetes 集群诊断：
 
-## 核心功能
+- **K8s 状态获取**：通过 `agent-kubectl-gateway` 访问集群
+- **Shell 命令执行**：通过 `shell-executor-mcp` 执行节点侧命令
+- **安全审计**：所有 Shell 命令先经过 `Safety Agent` 审计
+- **多步推理**：基于 `Eino StateGraph` 逐轮收集信息并生成报告
+- **Skill 中间件**：可按配置加载技能，增强诊断流程
+- **监控面板**：提供 9090 端口的监控与 Trace 查看能力
 
-*   **K8s 智能感知**: 自动与 K8s API 交互，获取 Node、Pod、Service、Event 等核心资源的状态信息。
-*   **安全诊断执行**: 内置安全子 Agent (Secure Sub-Agent)，对 Shell 诊断命令进行严格的语义分析与安全审计，确保只执行只读、非破坏性的操作（如禁止 `rm`, `mv` 等），防止误操作。
-*   **自动化分析报告**: 综合资源状态数据与诊断命令结果，基于 LLM (Large Language Model) 生成清晰的 Markdown 报告，包含问题现状、根因推断及具体的修复建议。
-*   **动态工具发现**: 系统启动时自动从 MCP Server 获取可用工具列表，动态注入到 LLM Prompt 中，无需手动维护工具清单。支持严格的启动校验，确保所有 MCP 连接正常且 Token 配置有效。
+架构细节见：[`docs/architecture-v2.md`](docs/architecture-v2.md)
 
-## 系统架构
+## 核心设计
 
-系统采用多 Agent 协作模式，通过图 (Graph) 结构编排分析流程。
+- **安全第一**：Shell 命令必须经过审计
+- **工具复用**：复用 gateway / MCP 的现有能力
+- **上下文精简**：LLM 只接收必要信息
+- **失败可恢复**：单个节点失败不应拖垮整个诊断流程
+
+## 总体架构
 
 ```mermaid
 graph TD
-    User[用户] -->|指令| InputProcessing[输入处理]
-    
-    subgraph "Main Agent (Eino Graph)"
-        InputProcessing --> DecisionNode{决策/路由节点}
-        
-        DecisionNode -->|需要更多信息| K8sTool[K8s MCP Client]
-        DecisionNode -->|需要验证| SubAgent[安全命令执行子 Agent]
-        DecisionNode -->|信息足够| ReportGen[报告生成]
-        
-        K8sTool -->|返回数据| AnalysisNode[结果分析]
-        SubAgent -->|返回结果| AnalysisNode
-        
-        AnalysisNode -->|更新上下文| DecisionNode
-    end
-    
-    subgraph "安全命令执行子 Agent"
-        SubInput[命令请求] --> SafetyCheck{安全评估逻辑}
-        SafetyCheck -->|通过| ShellTool[Shell Executor MCP Client]
-        SafetyCheck -->|拒绝| Error[返回安全错误]
-    end
-    
-    subgraph "External MCP Servers"
-        K8sServer[K8s MCP Server]
-        ShellServer[Shell Executor MCP Server]
-    end
-    
-    subgraph "Target Environment"
-        K8sCluster[Kubernetes Cluster]
-        OS[Operating System / Shell]
-    end
-
-    K8sTool <-->|MCP Protocol| K8sServer
-    ShellTool <-->|MCP Protocol| ShellServer
-    
-    K8sServer <-->|KubeAPI| K8sCluster
-    ShellServer <-->|Exec| OS
+  User[用户] --> MainAgent[Main Agent / StateGraph]
+  MainAgent --> InfoNode[InfoNode]
+  InfoNode --> DecisionNode[DecisionNode]
+  DecisionNode --> ActionNode[ActionNode]
+  ActionNode --> Gateway[agent-kubectl-gateway]
+  ActionNode --> SafetyAgent[Safety Agent]
+  SafetyAgent --> ShellMCP[shell-executor-mcp]
+  DecisionNode --> ReportNode[ReportNode]
+  ReportNode --> User
 ```
 
-### 核心组件说明
+### 组件说明
 
-*   **Main Agent**: 系统的“大脑”，负责意图识别、任务编排 (基于 Eino Graph) 以及最终报告的生成。它决定何时获取信息、何时执行诊断。
-*   **Secure Sub-Agent**: 系统的“安全守门员”，负责接收主 Agent 的命令请求，进行安全审计，仅允许安全的命令通过并调用底层的 Shell 执行器。
-*   **MCP Clients**:
-    *   `k8s-mcp`: 基于 [k8s-mcp](https://github.com/AceDarkknight/k8s-mcp) SDK 实现，用于连接 K8s MCP Server，查询集群资源。
-    *   `shell-executor-mcp`: 基于 [shell-executor-mcp](https://github.com/AceDarkknight/shell-executor-mcp) SDK 实现，用于连接 Shell Executor MCP Server，执行诊断命令。
+- **Main Agent**：负责意图识别、循环决策、信息聚合和报告生成
+- **Safety Agent**：对 Shell 命令做规则 + LLM 语义审计
+- **Gateway**：提供结构化 K8s 查询/操作能力
+- **shell-executor-mcp**：执行节点侧命令
+- **Skill Loader**：按配置加载技能目录，扩展诊断能力
+- **Monitor**：提供运行监控和 Trace 服务
 
-更多架构细节请参考 [docs/architecture.md](docs/architecture.md)。
+## 启动与失败策略
+
+- `gateway` 初始化失败：**直接退出**
+- `tool cache` 选择 `redis` / `file` 后端且初始化失败：**直接退出**
+- `tool cache` 选择 `memory`：可正常启动
+- `shell_mcp` 连接失败：当前实现支持降级模式
+- `monitor` 默认监听 9090，并写入 `data/traces`
 
 ## 目录结构
 
-*   `cmd/`: 项目入口文件，包含 `main.go`。
-*   `internal/`: 私有应用代码库。
-    *   `agent/`: Agent 核心逻辑，包含分析 (`analysis`) 和安全 (`safety`) 模块。
-    *   `client/`: MCP 客户端实现，包含 K8s 和 Shell 客户端。
-*   `docs/`: 项目文档，包含需求文档、架构文档及开发计划。
-*   `bin/`: 存放编译后的二进制文件及运行时配置文件。
+- `cmd/`：程序入口
+- `internal/agent/`：诊断与安全 Agent
+- `internal/client/`：Gateway / Shell MCP 客户端
+- `internal/store/`：Finding Store 与 ToolCache
+- `internal/config/`：配置加载
+- `docs/`：架构与设计文档
 
-## 快速开始 (Quick Start)
+## 快速开始
 
 ### 前置依赖
 
-1.  **Go**: 1.22 或更高版本。
-2.  **MCP Servers**:
-    *   正在运行的 [k8s-mcp](https://github.com/AceDarkknight/k8s-mcp) Server 。
-    *   正在运行的 shell-executor-mcp Server。
-3.  **LLM API**: 有效的 LLM API Key (如 OpenAI, Gemini, Claude 等)，用于支持 Agent 的智能分析。
+- Go 1.22+
+- 可用的 `agent-kubectl-gateway`
+- 可用的 `shell-executor-mcp`
+- 可用的 LLM API Key
 
-### 配置说明
+### 配置文件
 
-1.  **配置文件**: 
-    在 `bin/` 目录下，确保存在以下配置文件并根据实际情况修改：
-    *   `bin/k8s_config.json`: 配置 K8s MCP Server 的连接信息（如命令或 SSE 地址）。
-    *   `bin/shell_config.json`: 配置 Shell Executor MCP Server 的连接信息。
+默认配置路径：`configs/config.yaml`
 
-2.  **环境变量**:
-    设置必要的环境变量，例如：
-    ```bash
-    export OPENAI_API_KEY="your-api-key"
-    ```
+示例配置：
 
-### 构建指南
+```yaml
+gateway:
+  base_url: "https://localhost:8080"
+  auth_token: "${GATEWAY_AUTH_TOKEN}"
+  timeout_seconds: 30
 
-在项目根目录下执行以下命令：
+shell_mcp:
+  server_url: "http://localhost:9090"
+  transport: "sse"
+  auth_token: "${SHELL_MCP_TOKEN}"
+
+llm:
+  light:
+    provider: "openai"
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o-mini"
+    temperature: 0.1
+    max_tokens: 1000
+  power:
+    provider: "openai"
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o"
+    temperature: 0.3
+    max_tokens: 4000
+
+store:
+  type: "memory"   # memory / redis
+  redis:
+    host: "localhost"
+    port: 6379
+    password: ""
+    db: 0
+
+agent:
+  max_iterations: 10
+  compress_threshold: 4
+  output_max_lines: 50
+  output_max_chars: 3000
+  finding_ttl_hours: 1
+  verify_recommendations: true
+  max_verify_iterations: 2
+  tool_cache:
+    backend: "memory"  # memory / redis / file
+    ttl: "10m"
+    file_dir: "data/tool-cache"
+
+monitor:
+  api_port: 9090
+  trace_dir: "data/traces"
+
+skill:
+  enabled: false
+  dir: "./skills"
+```
+
+### 运行
 
 ```bash
-# 整理依赖
-go mod tidy
+go run cmd/k8s-analyzer/main.go --config configs/config.yaml "分析 default 命名空间下 nginx Pod 重启原因"
+```
 
-# 构建项目
+或者构建后运行：
+
+```bash
 go build -o bin/k8s-analyzer.exe cmd/k8s-analyzer/main.go
+./bin/k8s-analyzer.exe --config configs/config.yaml "分析 default 命名空间下 nginx Pod 重启原因"
 ```
 
-### 运行示例
+## 开发说明
 
-构建成功后，可以使用以下命令运行 Analyzer：
+- 文档优先：架构变化先同步 `docs/architecture-v2.md`
+- 启动入口：`cmd/k8s-analyzer/main.go`
+- 监控服务：`cmd/k8s-monitor/main.go`
+- 配置优先：`configs/config.yaml` 同步 `skill` / `monitor` / `tool_cache` 段
 
-```bash
-# 基本用法
-./bin/k8s-analyzer.exe --config bin/config.yaml "分析 default 命名空间下 nginx pod 重启的原因"
+## 备注
 
-# 查看帮助
-./bin/k8s-analyzer.exe --help
-```
-
-## 开发规范
-
-本项目遵循严格的开发流程规范，详情请参考 `docs/plan/` 下的文档。
-
-*   **文档优先**: 所有变更需先更新设计文档。
-*   **Code Review**: 所有代码提交需经过审查。
-*   **测试驱动**: 保持高单元测试覆盖率。
+当前 README 以 `docs/architecture-v2.md` 为准，旧版 K8s MCP / Shell 子 Agent 叙述已弃用。

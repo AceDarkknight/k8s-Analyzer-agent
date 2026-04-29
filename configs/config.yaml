@@ -9,8 +9,10 @@ gateway:
 # shell-executor-mcp 连接配置
 shell_mcp:
   server_url: "${SHELL_MCP_URL}"
-  transport: "sse"
+  transport: "streamable-http"
   auth_token: "${SHELL_MCP_TOKEN}"
+  timeout_seconds: 30
+  insecure_skip_verify: true
 
 # LLM 配置
 llm:
@@ -18,7 +20,7 @@ llm:
     provider: "openrouter"
     base_url: "https://openrouter.ai/api/v1"
     api_key: "${OPENAI_API_KEY}"
-    model: "minimax/minimax-m2.5"
+    model: "deepseek/deepseek-v4-flash"
     temperature: 0.1
     max_tokens: 128000
   power:
@@ -40,7 +42,7 @@ store:
 
 # Agent 行为配置
 agent:
-  max_iterations: 10
+  max_iterations: 20
   compress_threshold: 4
   output_max_lines: 100
   output_max_chars: 6000

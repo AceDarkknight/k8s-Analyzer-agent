@@ -81,29 +81,10 @@ func main() {
 	}
 	logger.Info("Gateway Client 初始化成功")
 
-	// 6. 初始化 Shell MCP Client（Warn if 失败，降级模式）
-	var mcpClient *shellmcp.ShellMCPClient
-	mcpClient = shellmcp.NewShellMCPClient(cfg.ShellMCP.ServerURL, cfg.ShellMCP.AuthToken)
-
-	// 使用带超时的连接
-	connectDone := make(chan error, 1)
-	go func() {
-		connectDone <- mcpClient.Connect(ctx)
-	}()
-
-	select {
-	case err := <-connectDone:
-		if err != nil {
-			logger.Warn("Shell MCP Client 连接失败，将以降级模式运行", logger.Err(err))
-			mcpClient = nil // 降级：设为 nil
-		} else {
-			logger.Info("Shell MCP Client 连接成功")
-			defer mcpClient.Close()
-		}
-	case <-time.After(10 * time.Second):
-		logger.Warn("Shell MCP Client 连接超时，将以降级模式运行")
-		mcpClient = nil // 降级：设为 nil
-	}
+	// 6. 初始化 Shell MCP Client（懒连接模式：首次执行命令时自动连接）
+	mcpClient := shellmcp.NewShellMCPClientWithOptions(cfg.ShellMCP.ServerURL, cfg.ShellMCP.AuthToken, cfg.ShellMCP.GetTimeoutSeconds(), cfg.ShellMCP.InsecureSkipVerify)
+	defer mcpClient.Close()
+	logger.Info("Shell MCP Client 初始化成功（懒连接模式）", logger.String("url", cfg.ShellMCP.ServerURL))
 
 	// 7. 初始化 LLM Router
 	llmRouter, err := llm.NewLLMRouter(ctx, &cfg.LLM)

@@ -65,6 +65,15 @@ func SanitizeTaskTrace(src *TaskTrace) *TaskTrace {
 			cloned.ReasoningHistory[i].Thought = sanitizeString(step.Thought)
 			cloned.ReasoningHistory[i].Observation = sanitizeString(step.Observation)
 			cloned.ReasoningHistory[i].DeepQueryTopic = sanitizeString(step.DeepQueryTopic)
+			if len(step.ToolCalls) > 0 {
+				tcs := make([]TraceToolCallDetail, len(step.ToolCalls))
+				for j, tc := range step.ToolCalls {
+					tcs[j] = tc
+					tcs[j].Output = sanitizeString(tc.Output)
+					tcs[j].Args = sanitizeMap(tc.Args)
+				}
+				cloned.ReasoningHistory[i].ToolCalls = tcs
+			}
 		}
 	}
 	if len(src.BlockedCommands) > 0 {

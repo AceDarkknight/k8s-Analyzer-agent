@@ -48,11 +48,18 @@ func (r *TaskRecorder) Emit(event TraceEvent) {
 	if r == nil || event == nil {
 		return
 	}
+	// 检查 closed 标志时短暂持锁，检查完立即释放。
+	// 不能在持锁期间做阻塞 channel 发送——会导致 stateMu 与 channel 背压形成死锁：
+	// react_llm goroutine 持 stateMu 阻塞在 send，同时 agent.Generate 因 future 满也阻塞，双向等待。
 	r.stateMu.Lock()
-	defer r.stateMu.Unlock()
 	if r.closed {
+		r.stateMu.Unlock()
 		return
 	}
+	r.stateMu.Unlock()
+
+	// 释放锁后再发送；用 recover 防止 Close 与 Emit 极端并发时向已关闭 channel 发送引发 panic
+	defer func() { recover() }()
 	r.events <- event
 }
 

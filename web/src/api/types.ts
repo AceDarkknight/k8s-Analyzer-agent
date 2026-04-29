@@ -12,11 +12,28 @@ export interface TokenUsage {
   total_tokens: number;
 }
 
+// 单次 LLM 调用记录
+export interface LLMCallRecord {
+  model_type: string;         // "light" | "power"
+  model_name: string;         // 实际使用的模型名称
+  source: string;             // "decision" | "report" | "deep_query"
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  duration_ms: number;
+  timestamp: string;
+  input?: string;             // LLM 输入内容（prompt）
+  output?: string;            // LLM 输出内容（completion）
+  cache_hit?: boolean;        // 是否命中缓存
+}
+
 // 推理步骤（Trace 中的 ReasoningStep）
 export interface TraceReasoningStep {
   iteration: number;
+  timestamp?: string;
   thought: string;
-  decision: string;
+  decision: string;                // "execute_plan" | "deep_query" | "report"
+  deep_query_topic?: string;       // 仅 deep_query 时有值
   tool_calls: TraceToolCall[];
   observation: string;
   duration_ms: number;
@@ -50,9 +67,10 @@ export interface TaskTrace {
   task_id: string;
   timestamp: string;
   user_input: string;
-  status: 'success' | 'failed';
+  status: 'success' | 'failed' | 'partial';
   total_duration_ms: number;
   token_usage: TokenUsage;
+  llm_calls: LLMCallRecord[];
   k8s_info: Record<string, unknown>;
   reasoning_history: TraceReasoningStep[];
   tool_executions: TraceToolExecution[];
@@ -66,7 +84,7 @@ export interface TaskIndexRecord {
   task_id: string;
   timestamp: string;
   user_input: string;
-  status: 'success' | 'failed';
+  status: 'success' | 'failed' | 'partial';
   total_duration_ms: number;
   total_tokens: number;
   prompt_tokens: number;

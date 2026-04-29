@@ -2,34 +2,73 @@ package shellmcp
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/stretchr/testify/assert"
 )
 
+func TestMain(m *testing.M) {
+	_ = logger.Init(nil)
+	os.Exit(m.Run())
+}
+
 func TestNewShellMCPClient(t *testing.T) {
-	client := NewShellMCPClient("http://localhost:8080/sse", "test-token")
+	client := NewShellMCPClient("http://localhost:8080/mcp", "test-token", 30)
 
 	assert.NotNil(t, client)
-	assert.Equal(t, "http://localhost:8080/sse", client.serverURL)
+	assert.Equal(t, "http://localhost:8080/mcp", client.serverURL)
 	assert.Equal(t, "test-token", client.authToken)
 	assert.False(t, client.connected)
 	assert.False(t, client.IsConnected())
 }
 
+func TestNormalizeEndpointURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty", in: "", want: ""},
+		{name: "bare host", in: "http://localhost:8080", want: "http://localhost:8080/mcp"},
+		{name: "root path", in: "http://localhost:8080/", want: "http://localhost:8080/mcp"},
+		{name: "already mcp", in: "http://localhost:8080/mcp", want: "http://localhost:8080/mcp"},
+		{name: "nested path", in: "http://localhost:8080/api", want: "http://localhost:8080/api/mcp"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizeEndpointURL(tt.in))
+		})
+	}
+}
+
 func TestShellMCPClient_ExecuteCommand_NotConnected(t *testing.T) {
-	client := NewShellMCPClient("http://localhost:8080/sse", "test-token")
+	client := NewShellMCPClient("http://localhost:8080/mcp", "test-token", 30)
 
 	ctx := context.Background()
 	result, err := client.ExecuteCommand(ctx, "ls -la")
 
 	assert.Nil(t, result)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not connected")
+	// 懒连接模式下会自动尝试连接，连接失败会返回 lazy connect failed
+	assert.Contains(t, err.Error(), "lazy connect failed")
+}
+
+func TestIsConnectionError(t *testing.T) {
+	assert.True(t, isConnectionError(fmt.Errorf("read tcp: wsarecv: A connection attempt failed")))
+	assert.True(t, isConnectionError(fmt.Errorf("EOF")))
+	assert.True(t, isConnectionError(fmt.Errorf("connection reset by peer")))
+	assert.True(t, isConnectionError(fmt.Errorf("i/o timeout")))
+	assert.True(t, isConnectionError(fmt.Errorf("failed to respond")))
+	assert.False(t, isConnectionError(fmt.Errorf("command not found")))
+	assert.False(t, isConnectionError(nil))
 }
 
 func TestShellMCPClient_ListTools_NotConnected(t *testing.T) {
-	client := NewShellMCPClient("http://localhost:8080/sse", "test-token")
+	client := NewShellMCPClient("http://localhost:8080/mcp", "test-token", 30)
 
 	ctx := context.Background()
 	tools, err := client.ListTools(ctx)
@@ -41,14 +80,14 @@ func TestShellMCPClient_ListTools_NotConnected(t *testing.T) {
 }
 
 func TestShellMCPClient_IsConnected(t *testing.T) {
-	client := NewShellMCPClient("http://localhost:8080/sse", "test-token")
+	client := NewShellMCPClient("http://localhost:8080/mcp", "test-token", 30)
 
 	// 初始状态应该未连接
 	assert.False(t, client.IsConnected())
 }
 
 func TestShellMCPClient_Close_NotConnected(t *testing.T) {
-	client := NewShellMCPClient("http://localhost:8080/sse", "test-token")
+	client := NewShellMCPClient("http://localhost:8080/mcp", "test-token", 30)
 
 	// 关闭未连接的客户端应该不返回错误
 	err := client.Close()

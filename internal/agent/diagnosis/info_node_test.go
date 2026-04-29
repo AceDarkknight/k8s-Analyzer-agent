@@ -137,6 +137,124 @@ func TestParsePods(t *testing.T) {
 	}
 }
 
+func TestParsePods_WideFormat(t *testing.T) {
+	stdout := `NAMESPACE NAME READY STATUS RESTARTS AGE IP NODE NOMINATED NODE READINESS GATES
+default pod-wide-1 1/1 Running 1 (32d ago) 5m 10.1.2.3 node-1 <none> <none>`
+	pods, err := parsePods(stdout, "default")
+	if err != nil {
+		t.Fatalf("parsePods wide failed: %v", err)
+	}
+	if len(pods) != 1 {
+		t.Fatalf("expected 1 pod, got %d", len(pods))
+	}
+	p, ok := pods[0].(state.PodInfo)
+	if !ok {
+		t.Fatalf("expected PodInfo type, got %T", pods[0])
+	}
+	if p.Namespace != "default" {
+		t.Errorf("expected namespace 'default', got %q", p.Namespace)
+	}
+	if p.Name != "pod-wide-1" {
+		t.Errorf("expected name 'pod-wide-1', got %q", p.Name)
+	}
+	if p.Status != "Running" {
+		t.Errorf("expected status 'Running', got %q", p.Status)
+	}
+	if p.Restarts != 1 {
+		t.Errorf("expected restarts 1, got %d", p.Restarts)
+	}
+	if p.NodeName != "node-1" {
+		t.Errorf("expected node 'node-1', got %q", p.NodeName)
+	}
+	if p.Age != "5m" {
+		t.Errorf("expected age '5m', got %q", p.Age)
+	}
+}
+
+func TestParseDeployments_WideFormat(t *testing.T) {
+	stdout := `NAME READY UP-TO-DATE AVAILABLE AGE
+nginx 1/1 1 1 5m`
+	deps, err := parseDeployments(stdout)
+	if err != nil {
+		t.Fatalf("parseDeployments wide failed: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 deployment, got %d", len(deps))
+	}
+	d, ok := deps[0].(state.DeploymentInfo)
+	if !ok {
+		t.Fatalf("expected DeploymentInfo type, got %T", deps[0])
+	}
+	if d.Name != "nginx" {
+		t.Errorf("expected name 'nginx', got %q", d.Name)
+	}
+	if d.Replicas != 1 {
+		t.Errorf("expected replicas 1, got %d", d.Replicas)
+	}
+	if d.ReadyReplicas != 1 {
+		t.Errorf("expected readyReplicas 1, got %d", d.ReadyReplicas)
+	}
+	if d.UpdatedReplicas != 1 {
+		t.Errorf("expected updatedReplicas 1, got %d", d.UpdatedReplicas)
+	}
+	if d.AvailableReplicas != 1 {
+		t.Errorf("expected availableReplicas 1, got %d", d.AvailableReplicas)
+	}
+}
+
+func TestParseServices_WideFormat(t *testing.T) {
+	stdout := `NAME TYPE CLUSTER-IP EXTERNAL-IP PORT(S) AGE
+my-service ClusterIP 10.0.0.1 <none> 80/TCP 3m`
+	svcs, err := parseServices(stdout)
+	if err != nil {
+		t.Fatalf("parseServices wide failed: %v", err)
+	}
+	if len(svcs) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(svcs))
+	}
+	s, ok := svcs[0].(state.ServiceInfo)
+	if !ok {
+		t.Fatalf("expected ServiceInfo type, got %T", svcs[0])
+	}
+	if s.Name != "my-service" {
+		t.Errorf("expected name 'my-service', got %q", s.Name)
+	}
+	if s.Type != "ClusterIP" {
+		t.Errorf("expected type 'ClusterIP', got %q", s.Type)
+	}
+	if s.ClusterIP != "10.0.0.1" {
+		t.Errorf("expected clusterIP '10.0.0.1', got %q", s.ClusterIP)
+	}
+	if s.Ports != "80/TCP" {
+		t.Errorf("expected ports '80/TCP', got %q", s.Ports)
+	}
+}
+
+func TestApplyNamespaceToScopedResources(t *testing.T) {
+	resources := []interface{}{
+		state.DeploymentInfo{Name: "dep-1"},
+		state.ServiceInfo{Name: "svc-1"},
+		state.PodInfo{Name: "pod-1", Namespace: "default"},
+	}
+
+	result := applyNamespaceToScopedResources(resources, "kube-system")
+
+	dep := result[0].(state.DeploymentInfo)
+	if dep.Namespace != "kube-system" {
+		t.Fatalf("expected deployment namespace kube-system, got %q", dep.Namespace)
+	}
+
+	svc := result[1].(state.ServiceInfo)
+	if svc.Namespace != "kube-system" {
+		t.Fatalf("expected service namespace kube-system, got %q", svc.Namespace)
+	}
+
+	pod := result[2].(state.PodInfo)
+	if pod.Namespace != "default" {
+		t.Fatalf("expected existing pod namespace to stay default, got %q", pod.Namespace)
+	}
+}
+
 func TestParseDeployments(t *testing.T) {
 	jsonData := `{
 		"items": [

@@ -53,7 +53,9 @@ func (n *ReportNode) Execute(ctx context.Context, s *state.State) (*state.State,
 		schema.UserMessage(prompt),
 	}
 
+	llmStart := time.Now()
 	response, usage, err := n.router.GenerateWithPower(ctx, messages)
+	llmDuration := time.Since(llmStart)
 	if err != nil {
 		logger.Error("ReportNode: LLM generation failed", logger.Err(err))
 		n.generateFallbackReport(s)
@@ -62,7 +64,18 @@ func (n *ReportNode) Execute(ctx context.Context, s *state.State) (*state.State,
 	if usage != nil {
 		s.AccumulateTokenUsage(usage)
 		if n.recorder != nil {
-			n.recorder.Emit(trc.LLMTokenUsedEvent{Source: "report", PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens})
+			n.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
+				ModelType:        "power",
+				ModelName:        n.router.PowerModelName(),
+				Source:           "report",
+				PromptTokens:     usage.PromptTokens,
+				CompletionTokens: usage.CompletionTokens,
+				TotalTokens:      usage.TotalTokens,
+				DurationMs:       llmDuration.Milliseconds(),
+				Timestamp:        time.Now().Format(time.RFC3339),
+				Input:            prompt,
+				Output:           response.Content,
+			}})
 		}
 	}
 

@@ -26,7 +26,7 @@ cmd/
 ```
 
 *   **`k8s-analyzer <query>`** (现有行为)：执行一次性 CLI 诊断，完成后退出。诊断结束时将 Trace 写入文件存储。
-*   **`k8s-monitor [--port 8080] [--config configs/config.yaml]`** (新增)：独立启动 Monitor API Server，持续运行，提供 REST API 和 Prometheus `/metrics`。读取历史 Trace 文件供前端查询。
+*   **`k8s-monitor [--port 9090] [--config configs/config.yaml]`** (新增)：独立启动 Monitor API Server，持续运行，提供 REST API 和 Prometheus `/metrics`。读取历史 Trace 文件供前端查询。
 
 > **设计原则**：两个可执行程序完全独立编译和运行。`k8s-analyzer` 保持纯 CLI 工具特性（执行完退出），`k8s-monitor` 专注于数据展示。两者通过共享的文件存储（Trace 文件）解耦。
 
@@ -273,7 +273,7 @@ func (a *Agent) Run(ctx context.Context, userQuery string) (*state.AnalysisResul
 
 ### 5.4 部署策略
 
-*   **开发阶段**：`vite.config.ts` 配置 proxy 将 `/api` 代理到 `http://localhost:8080`。
+*   **开发阶段**：`vite.config.ts` 配置 proxy 将 `/api` 代理到 `http://localhost:9090`。
 *   **生产部署**：使用 Go `//go:embed` 将 `web/dist/` 嵌入 `k8s-monitor` 二进制中，实现单文件部署。
 
 ## 6. 需同步更新的配置
