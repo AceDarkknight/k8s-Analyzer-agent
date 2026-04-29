@@ -310,6 +310,7 @@ func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *st
 					TotalTokens:      usage.TotalTokens,
 					DurationMs:       0, // 每轮无独立计时
 					Timestamp:        time.Now().Format(time.RFC3339),
+					Output:           msg.Content,
 				}})
 			}
 		}

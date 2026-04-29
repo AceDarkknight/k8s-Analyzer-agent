@@ -9,9 +9,10 @@ gateway:
 # shell-executor-mcp 连接配置
 shell_mcp:
   server_url: "${SHELL_MCP_URL}"
-  transport: "sse"
+  transport: "streamable-http"
   auth_token: "${SHELL_MCP_TOKEN}"
   timeout_seconds: 30
+  insecure_skip_verify: true
 
 # LLM 配置
 llm:

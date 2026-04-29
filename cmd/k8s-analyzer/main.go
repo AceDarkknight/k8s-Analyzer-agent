@@ -82,7 +82,7 @@ func main() {
 	logger.Info("Gateway Client 初始化成功")
 
 	// 6. 初始化 Shell MCP Client（懒连接模式：首次执行命令时自动连接）
-	mcpClient := shellmcp.NewShellMCPClient(cfg.ShellMCP.ServerURL, cfg.ShellMCP.AuthToken, cfg.ShellMCP.GetTimeoutSeconds())
+	mcpClient := shellmcp.NewShellMCPClientWithOptions(cfg.ShellMCP.ServerURL, cfg.ShellMCP.AuthToken, cfg.ShellMCP.GetTimeoutSeconds(), cfg.ShellMCP.InsecureSkipVerify)
 	defer mcpClient.Close()
 	logger.Info("Shell MCP Client 初始化成功（懒连接模式）", logger.String("url", cfg.ShellMCP.ServerURL))
 

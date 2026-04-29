@@ -24,6 +24,9 @@ type LLMCallRecord struct {
 	TotalTokens      int    `json:"total_tokens"`
 	DurationMs       int64  `json:"duration_ms"`
 	Timestamp        string `json:"timestamp"`
+	Input            string `json:"input,omitempty"`  // LLM 输入内容（prompt）
+	Output           string `json:"output,omitempty"` // LLM 输出内容（completion）
+	CacheHit         bool   `json:"cache_hit"`        // 是否命中缓存
 }
 
 type TraceToolExecution struct {

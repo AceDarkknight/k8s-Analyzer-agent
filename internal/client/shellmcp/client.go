@@ -3,6 +3,8 @@ package shellmcp
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +22,7 @@ type ShellMCPClient struct {
 	authToken      string
 	connected      bool
 	timeoutSeconds int // 命令执行超时（秒）
+	insecureSkipTLS bool
 }
 
 // ExecuteResult 执行结果
@@ -46,15 +49,49 @@ type ToolInfo struct {
 
 // NewShellMCPClient 创建 ShellMCPClient 实例（不立即连接，首次执行命令时自动连接）
 func NewShellMCPClient(serverURL, authToken string, timeoutSeconds int) *ShellMCPClient {
+	return NewShellMCPClientWithOptions(serverURL, authToken, timeoutSeconds, false)
+}
+
+// NewShellMCPClientWithOptions 创建带可选配置的 ShellMCPClient
+func NewShellMCPClientWithOptions(serverURL, authToken string, timeoutSeconds int, insecureSkipVerify bool) *ShellMCPClient {
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 30
 	}
 	return &ShellMCPClient{
-		serverURL:      serverURL,
-		authToken:      authToken,
-		connected:      false,
-		timeoutSeconds: timeoutSeconds,
+		serverURL:       normalizeEndpointURL(serverURL),
+		authToken:       authToken,
+		connected:       false,
+		timeoutSeconds:  timeoutSeconds,
+		insecureSkipTLS: insecureSkipVerify,
 	}
+}
+
+func normalizeEndpointURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return raw
+	}
+
+	cleanPath := strings.TrimSpace(parsed.Path)
+	switch cleanPath {
+	case "", "/":
+		parsed.Path = "/mcp"
+	default:
+		if !strings.HasSuffix(cleanPath, "/mcp") {
+			parsed.Path = path.Join(cleanPath, "mcp")
+		}
+	}
+
+	if parsed.Path == "" {
+		parsed.Path = "/mcp"
+	}
+
+	return parsed.String()
 }
 
 // Connect 建立到 MCP 服务器的连接
@@ -86,10 +123,21 @@ func (c *ShellMCPClient) connectLocked(ctx context.Context) error {
 				URL:  c.serverURL,
 			},
 		},
+		InsecureSkipVerify: c.insecureSkipTLS,
 	}
 
 	// 创建客户端
-	client, err := mcpclient.NewClient(cfg, mcpclient.WithLogger(logger.GetLogger().Sugar()))
+	opts := []mcpclient.Option{
+		mcpclient.WithLogger(logger.GetLogger().Sugar()),
+		mcpclient.WithTimeout(time.Duration(c.timeoutSeconds) * time.Second),
+	}
+	if strings.TrimSpace(c.authToken) != "" {
+		opts = append(opts, mcpclient.WithHeader("X-Cluster-Token", c.authToken))
+	}
+	if c.insecureSkipTLS {
+		opts = append(opts, mcpclient.WithInsecureSkipVerify())
+	}
+	client, err := mcpclient.NewClient(cfg, opts...)
 	if err != nil {
 		logger.Error("failed to create shell MCP client", logger.Err(err))
 		return fmt.Errorf("failed to create shell MCP client: %w", err)

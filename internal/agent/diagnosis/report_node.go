@@ -73,6 +73,8 @@ func (n *ReportNode) Execute(ctx context.Context, s *state.State) (*state.State,
 				TotalTokens:      usage.TotalTokens,
 				DurationMs:       llmDuration.Milliseconds(),
 				Timestamp:        time.Now().Format(time.RFC3339),
+				Input:            prompt,
+				Output:           response.Content,
 			}})
 		}
 	}

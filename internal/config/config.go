@@ -32,10 +32,11 @@ type GatewayConfig struct {
 
 // ShellMCPConfig Shell MCP 服务器配置
 type ShellMCPConfig struct {
-	ServerURL      string `yaml:"server_url"`      // 支持 ${ENV_VAR}
-	Transport      string `yaml:"transport"`       // "sse"
-	AuthToken      string `yaml:"auth_token"`      // 支持 ${ENV_VAR}
-	TimeoutSeconds int    `yaml:"timeout_seconds"` // 命令执行超时（秒）
+	ServerURL          string `yaml:"server_url"`            // 支持 ${ENV_VAR}
+	Transport          string `yaml:"transport"`             // "streamable-http"
+	AuthToken          string `yaml:"auth_token"`            // 支持 ${ENV_VAR}
+	TimeoutSeconds     int    `yaml:"timeout_seconds"`       // 命令执行超时（秒）
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"` // 是否跳过 TLS 证书校验
 }
 
 // GetTimeoutSeconds 返回 Shell 命令执行超时时间（秒）

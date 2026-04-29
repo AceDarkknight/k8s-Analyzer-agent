@@ -175,7 +175,7 @@ function TracesTab({ trace }: { trace: TaskTrace }) {
                             <strong>输出摘要：</strong>
                             <Paragraph
                               copyable
-                              ellipsis={{ rows: 5, expandable: true }}
+                              ellipsis={{ rows: 5, expandable: 'collapsible' }}
                               style={{ margin: 0 }}
                             >
                               {tc.output}
@@ -208,7 +208,7 @@ function TracesTab({ trace }: { trace: TaskTrace }) {
                       children: (
                         <Paragraph
                           copyable
-                          ellipsis={{ rows: 8, expandable: true }}
+                          ellipsis={{ rows: 8, expandable: 'collapsible' }}
                           style={{ margin: 0, fontSize: 12, color: 'rgba(0,0,0,0.65)' }}
                         >
                           {step.observation}
@@ -320,6 +320,14 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
       ),
     },
     {
+      title: '缓存',
+      dataIndex: 'cache_hit',
+      key: 'cache_hit',
+      width: 70,
+      render: (v: boolean) =>
+        v ? <Tag color="cyan">命中</Tag> : <span style={{ color: '#bbb' }}>—</span>,
+    },
+    {
       title: 'Prompt Tokens',
       dataIndex: 'prompt_tokens',
       key: 'prompt_tokens',
@@ -355,6 +363,7 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
   const powerCalls = calls.filter((c) => c.model_type === 'power');
   const lightTokens = lightCalls.reduce((s, c) => s + c.total_tokens, 0);
   const powerTokens = powerCalls.reduce((s, c) => s + c.total_tokens, 0);
+  const cacheHitCount = calls.filter((c) => c.cache_hit).length;
 
   return (
     <div>
@@ -372,6 +381,7 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
           { label: 'Light 调用', value: `${lightCalls.length} 次 / ${lightTokens.toLocaleString()} tokens` },
           { label: 'Power 调用', value: `${powerCalls.length} 次 / ${powerTokens.toLocaleString()} tokens` },
           { label: '累计 Tokens', value: totalTokens.toLocaleString() },
+          ...(cacheHitCount > 0 ? [{ label: '缓存命中', value: `${cacheHitCount} 次` }] : []),
         ].map((item) => (
           <div
             key={item.label}
@@ -388,14 +398,78 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
         ))}
       </div>
 
-      {/* 明细表格 */}
+      {/* 明细表格（可展开查看输入输出） */}
       <Table<LLMCallRecord>
         dataSource={calls}
         columns={columns}
         rowKey={(_, index) => String(index)}
         size="small"
         pagination={false}
-        scroll={{ x: 1000 }}
+        scroll={{ x: 1100 }}
+        expandable={{
+          expandedRowRender: (record) => {
+            const hasInput = record.input && record.input.trim().length > 0;
+            const hasOutput = record.output && record.output.trim().length > 0;
+            if (!hasInput && !hasOutput) {
+              return <span style={{ color: '#bbb', fontSize: 12 }}>暂无输入/输出内容</span>;
+            }
+            const items = [];
+            if (hasInput) {
+              items.push({
+                key: 'input',
+                label: (
+                  <Space>
+                    <Tag color="blue">输入</Tag>
+                    <span style={{ color: '#999', fontSize: 12 }}>
+                      {record.input!.slice(0, 60)}{record.input!.length > 60 ? '…' : ''}
+                    </span>
+                  </Space>
+                ),
+                children: (
+                  <Paragraph
+                    copyable
+                    style={{ margin: 0 }}
+                  >
+                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                      {record.input}
+                    </pre>
+                  </Paragraph>
+                ),
+              });
+            }
+            if (hasOutput) {
+              items.push({
+                key: 'output',
+                label: (
+                  <Space>
+                    <Tag color="green">输出</Tag>
+                    <span style={{ color: '#999', fontSize: 12 }}>
+                      {record.output!.slice(0, 60)}{record.output!.length > 60 ? '…' : ''}
+                    </span>
+                  </Space>
+                ),
+                children: (
+                  <Paragraph
+                    copyable
+                    style={{ margin: 0 }}
+                  >
+                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                      {record.output}
+                    </pre>
+                  </Paragraph>
+                ),
+              });
+            }
+            return (
+              <Collapse
+                size="small"
+                items={items}
+              />
+            );
+          },
+          rowExpandable: (record) =>
+            !!(record.input?.trim() || record.output?.trim()),
+        }}
       />
     </div>
   );

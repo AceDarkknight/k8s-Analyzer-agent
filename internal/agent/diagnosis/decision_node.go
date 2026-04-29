@@ -184,6 +184,8 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 				TotalTokens:      usage.TotalTokens,
 				DurationMs:       llmDuration.Milliseconds(),
 				Timestamp:        time.Now().Format(time.RFC3339),
+				Input:            prompt,
+				Output:           response.Content,
 			}})
 		}
 	}

@@ -3,7 +3,7 @@ module github.com/AceDarkknight/k8s-analyzer-agent
 go 1.25.1
 
 require (
-	github.com/AceDarkknight/shell-executor-mcp v0.0.0-20260304061954-2c009f6b6d45
+	github.com/AceDarkknight/shell-executor-mcp v0.0.0-20260428111233-78fc7c588231
 	github.com/cloudwego/eino v0.8.0
 	github.com/cloudwego/eino-ext/adk/backend/local v0.2.4
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.8
