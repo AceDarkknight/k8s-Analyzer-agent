@@ -24,7 +24,8 @@ export interface LLMCallRecord {
   timestamp: string;
   input?: string;             // LLM 输入内容（prompt）
   output?: string;            // LLM 输出内容（completion）
-  cache_hit?: boolean;        // 是否命中缓存
+  cache_hit: boolean;         // 是否命中缓存（由 cached_tokens > 0 推导）
+  cached_tokens: number;      // Prompt Caching 命中的 token 数
 }
 
 // 推理步骤（Trace 中的 ReasoningStep）

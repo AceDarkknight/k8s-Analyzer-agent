@@ -30,6 +30,7 @@ import {
 import { fetchTaskDetail } from '../../api';
 import type { TaskTrace, TraceReasoningStep, LLMCallRecord } from '../../api/types';
 import { formatDuration, formatTimestamp } from '../../utils/format';
+import ExpandableText from './components/ExpandableText';
 
 const MarkdownReport = lazy(() => import('./MarkdownReport'))
 
@@ -55,29 +56,23 @@ function TracesTab({ trace }: { trace: TaskTrace }) {
     );
   }
 
-  // 按顺序将 decision 类型的 LLM 调用与步骤对应（第 i 个 decision 调用 ↔ 第 i 个步骤）
   const decisionCalls = llmCalls.filter(c => c.source === 'decision');
-  const stepModelMap: Record<number, LLMCallRecord> = {};
-  steps.forEach((step, idx) => {
-    if (idx < decisionCalls.length) {
-      stepModelMap[step.iteration] = decisionCalls[idx];
-    }
-  });
 
   return (
     <Timeline
-      items={steps.map((step) => {
+      items={steps.map((step, idx) => {
         const cfg = decisionConfig[step.decision] ?? {
           label: step.decision,
           color: 'default',
           dot: 'gray',
         };
-        const matchedCall = stepModelMap[step.iteration];
+        const matchedCall = decisionCalls[idx];
+        const displayRound = idx + 1;
 
         return {
           color: cfg.dot,
           children: (
-            <div key={step.iteration} style={{ marginBottom: 12 }}>
+            <div key={`${step.iteration}-${idx}`} style={{ marginBottom: 12 }}>
 
               {/* ── 头部行：轮次 + 阶段 + 模型 + tokens + 耗时 ── */}
               <div
@@ -90,8 +85,9 @@ function TracesTab({ trace }: { trace: TaskTrace }) {
                 }}
               >
                 <span style={{ fontWeight: 600, color: 'rgba(0,0,0,0.85)' }}>
-                  第 {step.iteration} 轮
+                  第 {displayRound} 轮
                 </span>
+                <Tag style={{ margin: 0 }}>原始迭代 {step.iteration}</Tag>
 
                 {/* 决策阶段标签 */}
                 <Tag color={cfg.color} style={{ margin: 0 }}>
@@ -173,13 +169,7 @@ function TracesTab({ trace }: { trace: TaskTrace }) {
                         {tc.output && (
                           <div>
                             <strong>输出摘要：</strong>
-                            <Paragraph
-                              copyable
-                              ellipsis={{ rows: 5, expandable: 'collapsible' }}
-                              style={{ margin: 0 }}
-                            >
-                              {tc.output}
-                            </Paragraph>
+                            <ExpandableText text={tc.output} rows={5} />
                           </div>
                         )}
                       </div>
@@ -206,13 +196,12 @@ function TracesTab({ trace }: { trace: TaskTrace }) {
                         </Space>
                       ),
                       children: (
-                        <Paragraph
-                          copyable
-                          ellipsis={{ rows: 8, expandable: 'collapsible' }}
-                          style={{ margin: 0, fontSize: 12, color: 'rgba(0,0,0,0.65)' }}
-                        >
-                          {step.observation}
-                        </Paragraph>
+                        <ExpandableText
+                          text={step.observation}
+                          rows={8}
+                          fontSize={12}
+                          color="rgba(0,0,0,0.65)"
+                        />
                       ),
                     },
                   ]}
@@ -320,12 +309,11 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
       ),
     },
     {
-      title: '缓存',
-      dataIndex: 'cache_hit',
-      key: 'cache_hit',
-      width: 70,
-      render: (v: boolean) =>
-        v ? <Tag color="cyan">命中</Tag> : <span style={{ color: '#bbb' }}>—</span>,
+      title: '缓存命中 Tokens',
+      dataIndex: 'cached_tokens',
+      key: 'cached_tokens',
+      width: 140,
+      render: (v: number | undefined) => (v ?? 0).toLocaleString(),
     },
     {
       title: 'Prompt Tokens',
@@ -363,7 +351,7 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
   const powerCalls = calls.filter((c) => c.model_type === 'power');
   const lightTokens = lightCalls.reduce((s, c) => s + c.total_tokens, 0);
   const powerTokens = powerCalls.reduce((s, c) => s + c.total_tokens, 0);
-  const cacheHitCount = calls.filter((c) => c.cache_hit).length;
+  const cachedTokensTotal = calls.reduce((sum, call) => sum + (call.cached_tokens ?? 0), 0);
 
   return (
     <div>
@@ -381,7 +369,7 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
           { label: 'Light 调用', value: `${lightCalls.length} 次 / ${lightTokens.toLocaleString()} tokens` },
           { label: 'Power 调用', value: `${powerCalls.length} 次 / ${powerTokens.toLocaleString()} tokens` },
           { label: '累计 Tokens', value: totalTokens.toLocaleString() },
-          ...(cacheHitCount > 0 ? [{ label: '缓存命中', value: `${cacheHitCount} 次` }] : []),
+          { label: '缓存命中 Tokens', value: cachedTokensTotal.toLocaleString() },
         ].map((item) => (
           <div
             key={item.label}
@@ -426,14 +414,7 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
                   </Space>
                 ),
                 children: (
-                  <Paragraph
-                    copyable
-                    style={{ margin: 0 }}
-                  >
-                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                      {record.input}
-                    </pre>
-                  </Paragraph>
+                  <ExpandableText text={record.input!} rows={10} />
                 ),
               });
             }
@@ -449,14 +430,7 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
                   </Space>
                 ),
                 children: (
-                  <Paragraph
-                    copyable
-                    style={{ margin: 0 }}
-                  >
-                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                      {record.output}
-                    </pre>
-                  </Paragraph>
+                  <ExpandableText text={record.output!} rows={10} />
                 ),
               });
             }

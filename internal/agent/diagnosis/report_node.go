@@ -61,23 +61,26 @@ func (n *ReportNode) Execute(ctx context.Context, s *state.State) (*state.State,
 		n.generateFallbackReport(s)
 		return s, nil
 	}
-	if usage != nil {
-		s.AccumulateTokenUsage(usage)
-		if n.recorder != nil {
-			n.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
-				ModelType:        "power",
-				ModelName:        n.router.PowerModelName(),
-				Source:           "report",
-				PromptTokens:     usage.PromptTokens,
-				CompletionTokens: usage.CompletionTokens,
-				TotalTokens:      usage.TotalTokens,
-				DurationMs:       llmDuration.Milliseconds(),
-				Timestamp:        time.Now().Format(time.RFC3339),
-				Input:            prompt,
-				Output:           response.Content,
-			}})
-		}
-	}
+    if usage != nil {
+        s.AccumulateTokenUsage(usage)
+        if n.recorder != nil {
+            cached := trc.ExtractCachedTokens(usage)
+            n.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
+                ModelType:        "power",
+                ModelName:        n.router.PowerModelName(),
+                Source:           "report",
+                PromptTokens:     usage.PromptTokens,
+                CompletionTokens: usage.CompletionTokens,
+                TotalTokens:      usage.TotalTokens,
+                DurationMs:       llmDuration.Milliseconds(),
+                Timestamp:        time.Now().Format(time.RFC3339),
+                Input:            prompt,
+                Output:           response.Content,
+                CachedTokens:     cached,
+                CacheHit:         cached > 0,
+            }})
+        }
+    }
 
 	if response == nil || response.Content == "" {
 		logger.Warn("ReportNode: empty LLM response")

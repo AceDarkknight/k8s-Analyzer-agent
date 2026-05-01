@@ -16,17 +16,22 @@ type TokenUsage struct {
 
 // LLMCallRecord 单次 LLM 调用记录
 type LLMCallRecord struct {
-	ModelType        string `json:"model_type"` // "light" | "power"
-	ModelName        string `json:"model_name"` // 实际使用的模型名称
-	Source           string `json:"source"`     // "decision" | "report" | "deep_query"
-	PromptTokens     int    `json:"prompt_tokens"`
-	CompletionTokens int    `json:"completion_tokens"`
-	TotalTokens      int    `json:"total_tokens"`
-	DurationMs       int64  `json:"duration_ms"`
-	Timestamp        string `json:"timestamp"`
-	Input            string `json:"input,omitempty"`  // LLM 输入内容（prompt）
-	Output           string `json:"output,omitempty"` // LLM 输出内容（completion）
-	CacheHit         bool   `json:"cache_hit"`        // 是否命中缓存
+    ModelType        string `json:"model_type"` // "light" | "power"
+    ModelName        string `json:"model_name"` // 实际使用的模型名称
+    Source           string `json:"source"`     // "decision" | "report" | "deep_query"
+    PromptTokens     int    `json:"prompt_tokens"`
+    CompletionTokens int    `json:"completion_tokens"`
+    TotalTokens      int    `json:"total_tokens"`
+    DurationMs       int64  `json:"duration_ms"`
+    Timestamp        string `json:"timestamp"`
+    Input            string `json:"input,omitempty"`  // LLM 输入内容（prompt）
+    Output           string `json:"output,omitempty"` // LLM 输出内容（completion）
+    // CachedTokens holds the number of tokens from prompt caching that were
+    // used for this LLM call. This enables a provider-agnostic way to detect
+    // whether the prompt was served from cache. The front-end derives
+    // CacheHit from whether CachedTokens > 0.
+    CachedTokens     int    `json:"cached_tokens"`
+    CacheHit         bool   `json:"cache_hit"`        // 是否命中缓存（从 CachedTokens > 0 推导）
 }
 
 type TraceToolExecution struct {

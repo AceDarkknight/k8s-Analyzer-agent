@@ -2,8 +2,10 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
+	openaiacl "github.com/cloudwego/eino-ext/libs/acl/openai"
 	openaimodel "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -67,7 +69,7 @@ func createChatModel(ctx context.Context, cfg *config.LLMConfig) (model.ChatMode
 		return nil, err
 	}
 
-	return chatModel, nil
+	return &cachedChatModel{inner: chatModel}, nil
 }
 
 // Light 返回轻量模型
@@ -120,4 +122,89 @@ func extractTokenUsage(msg *schema.Message) *schema.TokenUsage {
 	}
 	usage := *msg.ResponseMeta.Usage
 	return &usage
+}
+
+
+type cachedChatModel struct {
+	inner model.ChatModel
+}
+
+func (c *cachedChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	opts = append(opts, openaiacl.WithResponseMessageModifier(cacheTokensModifier))
+	return c.inner.Generate(ctx, input, opts...)
+}
+
+func (c *cachedChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	opts = append(opts, openaiacl.WithResponseMessageModifier(cacheTokensModifier))
+	return c.inner.Stream(ctx, input, opts...)
+}
+
+func (c *cachedChatModel) BindTools(tools []*schema.ToolInfo) error {
+	return c.inner.BindTools(tools)
+}
+
+func (c *cachedChatModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	tc, ok := c.inner.(model.ToolCallingChatModel)
+	if !ok {
+		return nil, fmt.Errorf("chat model does not support tool calling")
+	}
+	wrapped, err := tc.WithTools(tools)
+	if err != nil {
+		return nil, err
+	}
+	return &cachedToolCallingChatModel{inner: wrapped}, nil
+}
+
+type cachedToolCallingChatModel struct {
+	inner model.ToolCallingChatModel
+}
+
+func (c *cachedToolCallingChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	opts = append(opts, openaiacl.WithResponseMessageModifier(cacheTokensModifier))
+	return c.inner.Generate(ctx, input, opts...)
+}
+
+func (c *cachedToolCallingChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	opts = append(opts, openaiacl.WithResponseMessageModifier(cacheTokensModifier))
+	return c.inner.Stream(ctx, input, opts...)
+}
+
+func (c *cachedToolCallingChatModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	wrapped, err := c.inner.WithTools(tools)
+	if err != nil {
+		return nil, err
+	}
+	return &cachedToolCallingChatModel{inner: wrapped}, nil
+}
+
+func cacheTokensModifier(_ context.Context, msg *schema.Message, rawBody []byte) (*schema.Message, error) {
+	if msg == nil || msg.ResponseMeta == nil || msg.ResponseMeta.Usage == nil {
+		return msg, nil
+	}
+
+	if msg.ResponseMeta.Usage.PromptTokenDetails.CachedTokens > 0 {
+		return msg, nil
+	}
+
+	var raw struct {
+		Usage struct {
+			PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
+			PromptTokensDetails  *struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
+		} `json:"usage"`
+	}
+
+	if err := json.Unmarshal(rawBody, &raw); err != nil {
+		return msg, nil
+	}
+
+	switch {
+	case raw.Usage.PromptCacheHitTokens > 0:
+		msg.ResponseMeta.Usage.PromptTokenDetails.CachedTokens = raw.Usage.PromptCacheHitTokens
+	case raw.Usage.PromptTokensDetails != nil && raw.Usage.PromptTokensDetails.CachedTokens > 0:
+		msg.ResponseMeta.Usage.PromptTokenDetails.CachedTokens = raw.Usage.PromptTokensDetails.CachedTokens
+	}
+
+	return msg, nil
 }

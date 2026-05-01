@@ -301,6 +301,7 @@ func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *st
 			totalUsage.CompletionTokens += usage.CompletionTokens
 			totalUsage.TotalTokens += usage.TotalTokens
 			if r.recorder != nil {
+				cached := trc.ExtractCachedTokens(usage)
 				r.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
 					ModelType:        "power",
 					ModelName:        r.router.PowerModelName(),
@@ -310,7 +311,10 @@ func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *st
 					TotalTokens:      usage.TotalTokens,
 					DurationMs:       0, // 每轮无独立计时
 					Timestamp:        time.Now().Format(time.RFC3339),
+					Input:            userMsg.Content,
 					Output:           msg.Content,
+					CachedTokens:     cached,
+					CacheHit:         cached > 0,
 				}})
 			}
 		}

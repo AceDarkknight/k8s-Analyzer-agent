@@ -168,27 +168,30 @@ func (n *DecisionNode) Execute(ctx context.Context, s *state.State) (*DecisionOu
 		DeepQueryTopic: result.DeepQueryTopic,
 		ToolCalls:      toolCalls,
 	}
-	if usage != nil {
-		step.TokensUsed = usage.TotalTokens
-	}
+    if usage != nil {
+        step.TokensUsed = usage.TotalTokens
+    }
 	s.AddReasoningStep(step)
-	if n.recorder != nil {
-		n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: step})
-		if usage != nil {
-			n.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
-				ModelType:        "light",
-				ModelName:        n.router.LightModelName(),
-				Source:           "decision",
-				PromptTokens:     usage.PromptTokens,
-				CompletionTokens: usage.CompletionTokens,
-				TotalTokens:      usage.TotalTokens,
-				DurationMs:       llmDuration.Milliseconds(),
-				Timestamp:        time.Now().Format(time.RFC3339),
-				Input:            prompt,
-				Output:           response.Content,
-			}})
-		}
-	}
+    if n.recorder != nil {
+        n.recorder.Emit(trc.ReasoningStepUpdatedEvent{Step: step})
+        if usage != nil {
+            cached := trc.ExtractCachedTokens(usage)
+            n.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
+                ModelType:        "light",
+                ModelName:        n.router.LightModelName(),
+                Source:           "decision",
+                PromptTokens:     usage.PromptTokens,
+                CompletionTokens: usage.CompletionTokens,
+                TotalTokens:      usage.TotalTokens,
+                DurationMs:       llmDuration.Milliseconds(),
+                Timestamp:        time.Now().Format(time.RFC3339),
+                Input:            prompt,
+                Output:           response.Content,
+                CachedTokens:     cached,
+                CacheHit:         cached > 0,
+            }})
+        }
+    }
 
 	logger.Info("DecisionNode: decision made",
 		logger.String("decision", result.Decision),
