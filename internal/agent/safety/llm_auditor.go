@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm/promptregistry"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 )
 
@@ -22,13 +23,15 @@ type AuditResult struct {
 
 // LLMAuditor LLM 语义审计器
 type LLMAuditor struct {
-	llm model.ChatModel // 使用 Light 模型
+	llm       model.ChatModel // 使用 Light 模型
+	promptReg *promptregistry.PromptRegistry
 }
 
 // NewLLMAuditor 创建 LLM 审计器
-func NewLLMAuditor(llm model.ChatModel) *LLMAuditor {
+func NewLLMAuditor(llm model.ChatModel, promptReg *promptregistry.PromptRegistry) *LLMAuditor {
 	return &LLMAuditor{
-		llm: llm,
+		llm:       llm,
+		promptReg: promptReg,
 	}
 }
 
@@ -40,7 +43,7 @@ func (a *LLMAuditor) Audit(ctx context.Context, command, reason string) (*AuditR
 	)
 
 	// 构建审计 Prompt
-	prompt := buildAuditPrompt(command, reason)
+	prompt := a.buildAuditPrompt(ctx, command, reason)
 
 	// 调用 LLM
 	result, err := a.callLLM(ctx, prompt)
@@ -66,6 +69,20 @@ func (a *LLMAuditor) Audit(ctx context.Context, command, reason string) (*AuditR
 	)
 
 	return result, nil
+}
+
+func (a *LLMAuditor) buildAuditPrompt(ctx context.Context, command, reason string) string {
+	if a.promptReg == nil {
+		return buildAuditPrompt(command, reason)
+	}
+	prompt, err := a.promptReg.BuildSafety(ctx, "safety", promptregistry.VersionDefault, &promptregistry.SafetyPromptContext{
+		Command: command,
+		Reason:  reason,
+	})
+	if err != nil {
+		return ""
+	}
+	return prompt
 }
 
 // callLLM 调用 LLM 并解析结果

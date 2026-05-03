@@ -1,0 +1,86 @@
+version: "1.0.0"
+
+blocks:
+  - name: system_base
+    file: blocks/system_base.md
+    description: "[1] System Prompt - 基础系统角色（所有阶段共用）"
+  - name: tools_definition
+    file: blocks/tools_definition.md
+    description: "[2] Tool Definitions - 工具列表（K8s + 主机级）"
+  - name: constraints_decision
+    file: blocks/constraints_decision.md
+    description: "[3] Role Constraints - 决策阶段约束"
+  - name: constraints_verify
+    file: blocks/constraints_verify.md
+    description: "[3] Role Constraints - 验证阶段约束"
+  - name: reference_patterns
+    file: blocks/reference_patterns.md
+    description: "[4] Few-shot Examples - 诊断参考表 + 工具原则"
+
+prompts:
+  - name: decision
+    version: default
+    label: "v1.0.0"
+    file: decision/default.md
+    blocks: [system_base, tools_definition, constraints_decision, reference_patterns]
+    model_hint: light
+    environment: prod
+    description: "[1][2][3][4] + [5-10] 主诊断阶段决策 prompt（ReAct）"
+    tags: [diagnosis, decision, react]
+    is_active: true
+
+  - name: verify
+    version: default
+    label: "v1.0.0"
+    file: verify/default.md
+    blocks: [system_base, tools_definition, constraints_verify]
+    model_hint: light
+    environment: prod
+    description: "[1][2][3] + [6][8][10] 验证阶段决策 prompt"
+    tags: [diagnosis, verify]
+    is_active: true
+
+  - name: skill
+    version: default
+    label: "v1.0.0"
+    file: skill/default.md
+    blocks: [system_base, tools_definition, constraints_decision]
+    model_hint: light
+    environment: prod
+    description: "[1][2][3] + [5-10] Skill SOP 执行阶段"
+    tags: [diagnosis, skill, sop]
+    is_active: true
+
+  - name: report
+    version: default
+    label: "v1.0.0"
+    file: report/default.md
+    blocks: []
+    model_hint: power
+    environment: prod
+    description: "报告合成 prompt（独立，不引用通用 blocks）"
+    tags: [diagnosis, report]
+    is_active: true
+
+  - name: safety
+    version: default
+    label: "v1.0.0"
+    file: safety/default.md
+    blocks: []
+    model_hint: light
+    environment: prod
+    description: "Shell 安全审计（独立，不引用通用 blocks）"
+    tags: [safety, audit]
+    is_active: true
+
+  - name: reactSystem
+    version: default
+    label: "v1.0.0"
+    file: reactSystem/default.md
+    blocks: []
+    role: system
+    model_hint: light
+    environment: prod
+    description: "ReAct 工具链 system prompt（独立，不引用通用 blocks）"
+    tags: [diagnosis, react, system]
+    is_active: true

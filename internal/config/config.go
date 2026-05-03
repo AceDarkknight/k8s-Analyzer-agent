@@ -21,6 +21,7 @@ type Config struct {
 	Monitor  MonitorConfig  `yaml:"monitor"`
 	Log      LogConfig      `yaml:"log"`
 	Skill    SkillConfig    `yaml:"skill"`
+	Prompt   PromptConfig   `yaml:"prompt"`
 }
 
 // GatewayConfig 网关配置
@@ -109,6 +110,11 @@ type LogConfig struct {
 type SkillConfig struct {
 	Enabled bool   `yaml:"enabled"` // 是否启用技能中间件
 	Dir     string `yaml:"dir"`     // 技能目录，默认 ./skills
+}
+
+// PromptConfig Prompt 模板配置
+type PromptConfig struct {
+	TemplateDir string `yaml:"template_dir"` // 模板目录，默认 ./prompts
 }
 
 // MonitorConfig 监控与 Trace 配置
@@ -234,6 +240,9 @@ func (c *Config) setDefaults() {
 	if c.Skill.Dir == "" {
 		c.Skill.Dir = "./skills"
 	}
+	if c.Prompt.TemplateDir == "" {
+		c.Prompt.TemplateDir = "./prompts"
+	}
 	if c.Monitor.APIPort == 0 {
 		c.Monitor.APIPort = 9090
 	}
@@ -262,7 +271,7 @@ func (c *Config) validate() error {
 // String 返回配置的字符串表示（用于调试，隐藏敏感信息）
 func (c *Config) String() string {
 	return fmt.Sprintf(
-		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyIterations:%d}, Monitor:{APIPort:%d TraceDir:%s}, Skill:{Enabled:%t Dir:%s}, Log:{Level:%s FilePath:%s}}",
+		"Config{Gateway:{BaseURL:%s TimeoutSeconds:%d}, ShellMCP:{ServerURL:%s Transport:%s}, LLM:{Light:{Provider:%s Model:%s} Power:{Provider:%s Model:%s}}, Store:{Type:%s}, Agent:{MaxIterations:%d CompressThreshold:%d OutputMaxLines:%d OutputMaxChars:%d FindingTTLHours:%d VerifyRecommendations:%t MaxVerifyIterations:%d}, Monitor:{APIPort:%d TraceDir:%s}, Skill:{Enabled:%t Dir:%s}, Prompt:{TemplateDir:%s}, Log:{Level:%s FilePath:%s}}",
 		c.Gateway.BaseURL,
 		c.Gateway.TimeoutSeconds,
 		c.ShellMCP.ServerURL,
@@ -283,6 +292,7 @@ func (c *Config) String() string {
 		c.Monitor.TraceDir,
 		c.Skill.Enabled,
 		c.Skill.Dir,
+		c.Prompt.TemplateDir,
 		c.Log.Level,
 		c.Log.FilePath,
 	)

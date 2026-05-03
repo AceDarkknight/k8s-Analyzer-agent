@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm/promptregistry"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
@@ -30,19 +31,35 @@ type ReActLLM struct {
 	gateway      *gateway.GatewayClient
 	safeExecutor SafeCommandExecutor
 	recorder     *trc.TaskRecorder
+	promptReg    *promptregistry.PromptRegistry
 }
 
 // NewReActLLM 创建 ReAct LLM
-func NewReActLLM(router *LLMRouter, gw *gateway.GatewayClient, safeExecutor SafeCommandExecutor) *ReActLLM {
+func NewReActLLM(router *LLMRouter, gw *gateway.GatewayClient, safeExecutor SafeCommandExecutor, promptReg *promptregistry.PromptRegistry) *ReActLLM {
 	return &ReActLLM{
 		router:       router,
 		gateway:      gw,
 		safeExecutor: safeExecutor,
+		promptReg:    promptReg,
 	}
 }
 
 func (r *ReActLLM) SetRecorder(recorder *trc.TaskRecorder) {
 	r.recorder = recorder
+}
+
+// GetSystemPrompt 优先从 Prompt Registry 构建，失败时回退到硬编码模板。
+func (r *ReActLLM) GetSystemPrompt(ctx context.Context) string {
+	if r != nil && r.promptReg != nil {
+		prompt, err := r.promptReg.BuildSystemPrompt(ctx, "reactSystem", promptregistry.VersionDefault)
+		if err == nil && prompt != "" {
+			return prompt
+		}
+		if err != nil {
+			logger.Warn("prompt registry build failed for reactSystem, fallback to legacy", logger.Err(err))
+		}
+	}
+	return BuildReActSystemPrompt()
 }
 
 // listPodsInput list_pods 工具输入参数
@@ -265,7 +282,7 @@ func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *st
 	}
 
 	// 4. 构建系统提示词 + 用户查询
-	systemMsg := schema.SystemMessage(BuildReActSystemPrompt())
+	systemMsg := schema.SystemMessage(r.GetSystemPrompt(ctx))
 
 	// 构建集群状态摘要
 	clusterSummary := "未获取"

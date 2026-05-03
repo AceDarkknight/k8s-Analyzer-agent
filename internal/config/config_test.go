@@ -276,6 +276,7 @@ llm:
 	assert.Equal(t, 50, cfg.Agent.OutputMaxLines)
 	assert.Equal(t, 3000, cfg.Agent.OutputMaxChars)
 	assert.Equal(t, 1, cfg.Agent.FindingTTLHours)
+	assert.Equal(t, "./prompts", cfg.Prompt.TemplateDir)
 }
 
 func TestLoad_DefaultValues_Override(t *testing.T) {
@@ -294,6 +295,8 @@ llm:
 agent:
   max_iterations: 20
   compress_threshold: 8
+prompt:
+  template_dir: "./custom-prompts"
 `
 	configPath := createTempConfigFile(t, content)
 	cfg, err := Load(configPath)
@@ -306,6 +309,7 @@ agent:
 	// 未设置的字段仍使用默认值
 	assert.Equal(t, 50, cfg.Agent.OutputMaxLines)
 	assert.Equal(t, 3000, cfg.Agent.OutputMaxChars)
+	assert.Equal(t, "./custom-prompts", cfg.Prompt.TemplateDir)
 }
 
 func TestLoad_FileNotFound(t *testing.T) {
@@ -456,6 +460,7 @@ func TestConfig_String(t *testing.T) {
 			Level:    "info",
 			FilePath: "/var/log/app.log",
 		},
+		Prompt: PromptConfig{TemplateDir: "./prompts"},
 	}
 
 	str := cfg.String()
@@ -463,6 +468,7 @@ func TestConfig_String(t *testing.T) {
 	assert.Contains(t, str, "LLM:")
 	assert.Contains(t, str, "Store:")
 	assert.Contains(t, str, "Agent:")
+	assert.Contains(t, str, "Prompt:")
 	assert.Contains(t, str, "Log:")
 	// 确保敏感信息（API Key）不在 String() 输出中
 	assert.NotContains(t, str, "api_key")

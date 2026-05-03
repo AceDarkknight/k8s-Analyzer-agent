@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm/promptregistry"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/store"
@@ -17,17 +18,19 @@ import (
 
 // ReportNode 报告节点
 type ReportNode struct {
-	router   *llm.LLMRouter
-	store    store.FindingStore
-	recorder *trc.TaskRecorder
+	router    *llm.LLMRouter
+	store     store.FindingStore
+	recorder  *trc.TaskRecorder
+	promptReg *promptregistry.PromptRegistry
 }
 
 // NewReportNode 创建新的报告节点
-func NewReportNode(router *llm.LLMRouter, store store.FindingStore, recorder *trc.TaskRecorder) *ReportNode {
+func NewReportNode(router *llm.LLMRouter, store store.FindingStore, recorder *trc.TaskRecorder, promptReg *promptregistry.PromptRegistry) *ReportNode {
 	return &ReportNode{
-		router:   router,
-		store:    store,
-		recorder: recorder,
+		router:    router,
+		store:     store,
+		recorder:  recorder,
+		promptReg: promptReg,
 	}
 }
 
@@ -40,8 +43,8 @@ func (n *ReportNode) Execute(ctx context.Context, s *state.State) (*state.State,
 		matchVerifyResults(s)
 	}
 
-	// 1. 构建 prompt
-	prompt := llm.BuildSynthesizePrompt(s)
+	// 1. 构建 prompt（优先 Registry，失败回退 legacy）
+	prompt := n.buildPrompt(ctx, s)
 	if prompt == "" {
 		logger.Warn("ReportNode: empty prompt generated")
 		n.generateFallbackReport(s)
@@ -112,6 +115,96 @@ func (n *ReportNode) Execute(ctx context.Context, s *state.State) (*state.State,
 		logger.Int("findings", len(result.Findings)))
 
 	return s, nil
+}
+
+func (n *ReportNode) buildPrompt(ctx context.Context, s *state.State) string {
+	if n.promptReg != nil {
+		prompt, err := n.promptReg.BuildReport(ctx, "report", promptregistry.VersionDefault, n.buildRenderContext(s))
+		if err == nil && strings.TrimSpace(prompt) != "" {
+			return prompt
+		}
+		if err != nil {
+			logger.Warn("ReportNode: prompt registry build failed, fallback to legacy", logger.Err(err))
+		}
+	}
+	return llm.BuildSynthesizePrompt(s)
+}
+
+func (n *ReportNode) buildRenderContext(s *state.State) *promptregistry.ReportPromptContext {
+	status := "completed"
+	if s.LastError != nil {
+		status = "partial"
+	} else if s.GetIterationCount() >= s.GetMaxIterations() {
+		status = "max_iterations_reached"
+	}
+
+	resourceSummary := "未获取"
+	if s.K8sInfo != nil {
+		resourceSummary = s.K8sInfo.GetSummary()
+	}
+
+	rc := &promptregistry.ReportPromptContext{
+		UserQuery:       s.UserInput,
+		Status:          status,
+		ResourceSummary: resourceSummary,
+		IsVerifyPhase:   s.VerifyPhase,
+	}
+
+	if s.AnalysisResult != nil && len(s.AnalysisResult.Findings) > 0 {
+		findings := make([]string, 0, len(s.AnalysisResult.Findings))
+		for _, f := range s.AnalysisResult.Findings {
+			findings = append(findings, fmt.Sprintf("- [%s] %s: %s", f.Severity, f.Resource, f.Message))
+		}
+		rc.Findings = strings.Join(findings, "\n")
+	} else {
+		rc.Findings = "无"
+	}
+
+	execs := s.GetCommandExecutions()
+	if len(execs) > 0 {
+		cmds := make([]string, 0, len(execs))
+		for _, e := range execs {
+			st := "成功"
+			if !e.Success {
+				st = "失败"
+			}
+			out := e.Output
+			if len(out) > 4000 {
+				out = out[:4000] + "...[截断]"
+			}
+			cmds = append(cmds, fmt.Sprintf("- %s (%s)\n  输出摘要: %s", e.Command, st, out))
+		}
+		rc.CommandSummary = strings.Join(cmds, "\n")
+	} else {
+		rc.CommandSummary = "无"
+	}
+
+	blocked := s.GetBlockedCommands()
+	if len(blocked) > 0 {
+		lines := []string{"## 被安全审计拒绝的命令"}
+		for _, bc := range blocked {
+			lines = append(lines, fmt.Sprintf("- 命令: %s\n  原因: %s\n  建议: %s", bc.Command, bc.Reason, bc.Advice))
+		}
+		rc.BlockedCommands = strings.Join(lines, "\n")
+	}
+
+	if len(s.ReasoningHistory) > 0 {
+		lines := []string{"## 完整推理过程"}
+		for i, step := range s.ReasoningHistory {
+			thought := step.Thought
+			if len(thought) > 200 {
+				thought = thought[:200] + "..."
+			}
+			obs := step.Observation
+			if len(obs) > 300 {
+				obs = obs[:300] + "..."
+			}
+			lines = append(lines, fmt.Sprintf("轮次%d [%s]:\n思考: %s\n工具结果: %s", i+1, step.Decision, thought, obs))
+		}
+		rc.ReasoningChain = strings.Join(lines, "\n")
+	}
+
+	return rc
 }
 
 // deduplicateFindings 对 Findings 进行去重

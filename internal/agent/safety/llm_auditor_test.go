@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm/promptregistry"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/stretchr/testify/assert"
@@ -41,7 +42,7 @@ func TestLLMAuditor_Audit_Safe(t *testing.T) {
 		},
 	}
 
-	auditor := NewLLMAuditor(mock)
+	auditor := NewLLMAuditor(mock, nil)
 	result, err := auditor.Audit(context.Background(), "cat /var/log/messages", "查看日志")
 
 	assert.NoError(t, err)
@@ -61,7 +62,7 @@ func TestLLMAuditor_Audit_Dangerous(t *testing.T) {
 		},
 	}
 
-	auditor := NewLLMAuditor(mock)
+	auditor := NewLLMAuditor(mock, nil)
 	result, err := auditor.Audit(context.Background(), "rm -rf /tmp/*", "清理临时文件")
 
 	assert.NoError(t, err)
@@ -91,7 +92,7 @@ func TestLLMAuditor_Audit_InvalidJSON_RetrySuccess(t *testing.T) {
 		},
 	}
 
-	auditor := NewLLMAuditor(mock)
+	auditor := NewLLMAuditor(mock, nil)
 	result, err := auditor.Audit(context.Background(), "ps aux", "查看进程")
 
 	assert.NoError(t, err)
@@ -107,7 +108,7 @@ func TestLLMAuditor_Audit_ContextTimeout(t *testing.T) {
 		},
 	}
 
-	auditor := NewLLMAuditor(mock)
+	auditor := NewLLMAuditor(mock, nil)
 	result, err := auditor.Audit(context.Background(), "ls -la", "列出文件")
 
 	assert.NoError(t, err)
@@ -121,7 +122,7 @@ func TestLLMAuditor_Audit_ContextCanceled(t *testing.T) {
 		},
 	}
 
-	auditor := NewLLMAuditor(mock)
+	auditor := NewLLMAuditor(mock, nil)
 	result, err := auditor.Audit(context.Background(), "ls -la", "列出文件")
 
 	assert.NoError(t, err)
@@ -138,7 +139,7 @@ func TestLLMAuditor_Audit_MarkdownJSON(t *testing.T) {
 		},
 	}
 
-	auditor := NewLLMAuditor(mock)
+	auditor := NewLLMAuditor(mock, nil)
 	result, err := auditor.Audit(context.Background(), "systemctl status nginx", "检查服务状态")
 
 	assert.NoError(t, err)
@@ -158,7 +159,7 @@ func TestLLMAuditor_Audit_MarkdownNoLangJSON(t *testing.T) {
 		},
 	}
 
-	auditor := NewLLMAuditor(mock)
+	auditor := NewLLMAuditor(mock, nil)
 	result, err := auditor.Audit(context.Background(), "df -h", "查看磁盘")
 
 	assert.NoError(t, err)
@@ -177,7 +178,7 @@ func TestLLMAuditor_Audit_InvalidSafetyLevel(t *testing.T) {
 		},
 	}
 
-	auditor := NewLLMAuditor(mock)
+	auditor := NewLLMAuditor(mock, nil)
 	// 第一次失败，重试
 	mock.generateFunc = func(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.Message, error) {
 		return &schema.Message{
@@ -291,7 +292,7 @@ func TestLLMAuditor_Audit_RealContextTimeout(t *testing.T) {
 		},
 	}
 
-	auditor := NewLLMAuditor(mock)
+	auditor := NewLLMAuditor(mock, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
@@ -312,4 +313,19 @@ func TestBuildAuditPrompt(t *testing.T) {
 	assert.Contains(t, prompt, "Safe（安全）")
 	assert.Contains(t, prompt, "Warning（警告）")
 	assert.Contains(t, prompt, "Dangerous（危险）")
+}
+
+func TestLLMAuditor_BuildAuditPrompt_UseRegistry(t *testing.T) {
+	reg := promptregistry.NewPromptRegistry()
+	err := reg.Register(promptregistry.PromptSpec{
+		Name:     "safety",
+		Version:  promptregistry.VersionDefault,
+		Template: "审计命令={{.Command}}; 原因={{.Reason}}",
+	})
+	assert.NoError(t, err)
+
+	auditor := NewLLMAuditor(&mockChatModel{}, reg)
+	prompt := auditor.buildAuditPrompt(context.Background(), "ls -la", "检查目录")
+
+	assert.Equal(t, "审计命令=ls -la; 原因=检查目录", prompt)
 }
