@@ -14,11 +14,20 @@ type TokenUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// TraceAuditInfo 安全审计结果 trace 记录
+type TraceAuditInfo struct {
+	Allowed     bool   `json:"allowed"`
+	SafetyLevel string `json:"safety_level"`
+	Reason      string `json:"reason"`
+	Advice      string `json:"advice,omitempty"`
+	Method      string `json:"method"` // rule | llm
+}
+
 // LLMCallRecord 单次 LLM 调用记录
 type LLMCallRecord struct {
 	ModelType        string `json:"model_type"` // "light" | "power"
 	ModelName        string `json:"model_name"` // 实际使用的模型名称
-	Source           string `json:"source"`     // "decision" | "report" | "deep_query"
+	Source           string `json:"source"`     // "decision" | "report" | "deep_query" | "safety_audit"
 	PromptTokens     int    `json:"prompt_tokens"`
 	CompletionTokens int    `json:"completion_tokens"`
 	TotalTokens      int    `json:"total_tokens"`
@@ -39,6 +48,7 @@ type TraceToolExecution struct {
 	Timestamp  string                 `json:"timestamp"`
 	Cached     bool                   `json:"cached"`
 	Command    string                 `json:"command,omitempty"`
+	AuditInfo  *TraceAuditInfo        `json:"audit_info,omitempty"`
 }
 
 // TraceToolCallDetail 推理步骤内单次工具调用的完整记录（含执行结果与耗时）

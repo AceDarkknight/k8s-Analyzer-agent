@@ -59,6 +59,7 @@ type toolCallDTO struct {
 	DurationMs int64                  `json:"duration_ms"`
 	Timestamp  string                 `json:"timestamp,omitempty"`
 	Cached     bool                   `json:"cached"`
+	AuditInfo  *trc.TraceAuditInfo    `json:"audit_info,omitempty"`
 }
 
 type reasoningStepDTO struct {
@@ -131,6 +132,7 @@ func toTaskTraceDTO(trace *trc.TaskTrace) taskTraceDTO {
 			DurationMs: exec.DurationMs,
 			Timestamp:  exec.Timestamp,
 			Cached:     exec.Cached,
+			AuditInfo:  exec.AuditInfo,
 		})
 	}
 	steps := enrichReasoningSteps(trace.ReasoningHistory)

@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/agent/safety"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/gateway"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm/promptregistry"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
@@ -25,13 +26,20 @@ type SafeCommandExecutor interface {
 	ExecuteSafeCommand(ctx context.Context, command, reason string) (string, error)
 }
 
+// SafeCommandExecutorWithResult 扩展接口，返回完整 CommandResult
+type SafeCommandExecutorWithResult interface {
+	SafeCommandExecutor
+	ExecuteSafeCommandWithResult(ctx context.Context, command, reason string) (*safety.CommandResult, error)
+}
+
 // ReActLLM ReAct Agent 实现
 type ReActLLM struct {
-	router       *LLMRouter
-	gateway      *gateway.GatewayClient
-	safeExecutor SafeCommandExecutor
-	recorder     *trc.TaskRecorder
-	promptReg    *promptregistry.PromptRegistry
+	router                  *LLMRouter
+	gateway                 *gateway.GatewayClient
+	safeExecutor            SafeCommandExecutor
+	safeExecutorWithResult SafeCommandExecutorWithResult // 新增
+	recorder                *trc.TaskRecorder
+	promptReg               *promptregistry.PromptRegistry
 }
 
 // NewReActLLM 创建 ReAct LLM
@@ -46,8 +54,10 @@ func NewReActLLM(router *LLMRouter, gw *gateway.GatewayClient, safeExecutor Safe
 
 func (r *ReActLLM) SetRecorder(recorder *trc.TaskRecorder) {
 	r.recorder = recorder
+	if withResult, ok := r.safeExecutor.(SafeCommandExecutorWithResult); ok {
+		r.safeExecutorWithResult = withResult
+	}
 }
-
 // GetSystemPrompt 优先从 Prompt Registry 构建，失败时回退到硬编码模板。
 func (r *ReActLLM) GetSystemPrompt(ctx context.Context) string {
 	if r != nil && r.promptReg != nil {
@@ -227,6 +237,62 @@ func (r *ReActLLM) buildTools() ([]tool.InvokableTool, error) {
 
 	// execute_safe_command 工具
 	executeSafeCommandTool, err := utils.InferTool("execute_safe_command", "在集群节点上执行 Shell 命令（需通过安全审计）", func(ctx context.Context, input executeSafeCommandInput) (string, error) {
+		// 优先走带回结果的路径
+		if r.safeExecutorWithResult != nil && r.recorder != nil {
+			result, err := r.safeExecutorWithResult.ExecuteSafeCommandWithResult(ctx, input.Command, input.Reason)
+			if err != nil {
+				return fmt.Sprintf("Error: %v", err), nil
+			}
+			allowed := result.AuditInfo != nil && result.AuditInfo.Allowed
+			// emit 工具 trace（含 AuditInfo）
+			r.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{
+				ToolName:  "execute_safe_command",
+				Args:      map[string]interface{}{"command": input.Command, "reason": input.Reason},
+				Success:   allowed,
+				Output:    result.Output,
+				AuditInfo: trc.ConvertAuditInfo(result.AuditInfo),
+				Timestamp: time.Now().Format(time.RFC3339),
+			}})
+			if !allowed {
+				reason := "未知原因"
+				advice := ""
+				if result.AuditInfo != nil {
+					reason = result.AuditInfo.Reason
+					advice = result.AuditInfo.Advice
+				}
+				return fmt.Sprintf("命令被安全审计拒绝。原因: %s。建议: %s", reason, advice), nil
+			}
+			return result.Output, nil
+		}
+		// fallback：旧路径（无 recorder 或 executor 不支持扩展接口）
+		// 优先走带回结果的路径
+		if r.safeExecutorWithResult != nil && r.recorder != nil {
+			result, err := r.safeExecutorWithResult.ExecuteSafeCommandWithResult(ctx, input.Command, input.Reason)
+			if err != nil {
+				return fmt.Sprintf("Error: %v", err), nil
+			}
+			allowed := result.AuditInfo != nil && result.AuditInfo.Allowed
+			// emit 工具 trace（含 AuditInfo）
+			r.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{
+				ToolName:  "execute_safe_command",
+				Args:      map[string]interface{}{"command": input.Command, "reason": input.Reason},
+				Success:   allowed,
+				Output:    result.Output,
+				AuditInfo: trc.ConvertAuditInfo(result.AuditInfo),
+				Timestamp: time.Now().Format(time.RFC3339),
+			}})
+			if !allowed {
+				reason := "未知原因"
+				advice := ""
+				if result.AuditInfo != nil {
+					reason = result.AuditInfo.Reason
+					advice = result.AuditInfo.Advice
+				}
+				return fmt.Sprintf("命令被安全审计拒绝。原因: %s。建议: %s", reason, advice), nil
+			}
+			return result.Output, nil
+		}
+		// fallback：旧路径
 		output, err := r.safeExecutor.ExecuteSafeCommand(ctx, input.Command, input.Reason)
 		if err != nil {
 			return fmt.Sprintf("Error: %v", err), nil

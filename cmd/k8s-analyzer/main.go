@@ -122,7 +122,7 @@ func main() {
 		logger.Fatal("Safety Prompt 验证失败", logger.Err(err))
 	}
 
-	auditor = safety.NewLLMAuditor(llmRouter.Light(), promptReg)
+	auditor = safety.NewLLMAuditor(llmRouter.Light(), promptReg).WithModelName(llmRouter.LightModelName())
 
 	safetyAgent := safety.NewSafetyAgent(ruleEngine, auditor, mcpClient)
 	logger.Info("Safety Agent 初始化成功")
@@ -226,6 +226,15 @@ type safetyAgentAdapter struct {
 // ExecuteSafeCommand 实现 llm.SafeCommandExecutor 接口
 func (a *safetyAgentAdapter) ExecuteSafeCommand(ctx context.Context, command, reason string) (string, error) {
 	return a.safetyAgent.ExecuteSimple(ctx, command, reason)
+}
+
+// ExecuteSafeCommandWithResult 实现 llm.SafeCommandExecutorWithResult 接口
+func (a *safetyAgentAdapter) ExecuteSafeCommandWithResult(ctx context.Context, command, reason string) (*safety.CommandResult, error) {
+	return a.safetyAgent.ExecuteSafeCommand(ctx, &safety.CommandRequest{
+		Command: command,
+		Reason:  reason,
+		Source:  "react",
+	})
 }
 
 func printReport(result *state.AnalysisResult) {
