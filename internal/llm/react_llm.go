@@ -34,12 +34,12 @@ type SafeCommandExecutorWithResult interface {
 
 // ReActLLM ReAct Agent 实现
 type ReActLLM struct {
-	router                  *LLMRouter
-	gateway                 *gateway.GatewayClient
-	safeExecutor            SafeCommandExecutor
+	router                 *LLMRouter
+	gateway                *gateway.GatewayClient
+	safeExecutor           SafeCommandExecutor
 	safeExecutorWithResult SafeCommandExecutorWithResult // 新增
-	recorder                *trc.TaskRecorder
-	promptReg               *promptregistry.PromptRegistry
+	recorder               *trc.TaskRecorder
+	promptReg              *promptregistry.PromptRegistry
 }
 
 // NewReActLLM 创建 ReAct LLM
@@ -58,6 +58,7 @@ func (r *ReActLLM) SetRecorder(recorder *trc.TaskRecorder) {
 		r.safeExecutorWithResult = withResult
 	}
 }
+
 // GetSystemPrompt 优先从 Prompt Registry 构建，失败时回退到硬编码模板。
 func (r *ReActLLM) GetSystemPrompt(ctx context.Context) string {
 	if r != nil && r.promptReg != nil {
@@ -394,6 +395,8 @@ func (r *ReActLLM) DeepQuery(ctx context.Context, topic string, currentState *st
 					DurationMs:       0, // 每轮无独立计时
 					Timestamp:        time.Now().Format(time.RFC3339),
 					Output:           msg.Content,
+					CacheHit:         usage.PromptTokenDetails.CachedTokens > 0,
+					CachedTokens:     usage.PromptTokenDetails.CachedTokens,
 				}})
 			}
 		}

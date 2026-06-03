@@ -36,6 +36,7 @@ type State struct {
 	TotalPromptTokens     int
 	TotalCompletionTokens int
 	TotalTokens           int
+	TotalCachedTokens     int // 缓存命中的 token 总数
 }
 
 // NewState 创建新的 State
@@ -403,6 +404,7 @@ func (s *State) AccumulateTokenUsage(usage *schema.TokenUsage) {
 	s.TotalPromptTokens += usage.PromptTokens
 	s.TotalCompletionTokens += usage.CompletionTokens
 	s.TotalTokens += usage.TotalTokens
+	s.TotalCachedTokens += usage.PromptTokenDetails.CachedTokens
 }
 
 // GetRoundCacheStats 获取指定轮次的缓存统计

@@ -126,12 +126,13 @@ func (a *LLMAuditor) callLLM(ctx context.Context, prompt string) (*AuditResult, 
 
 	// emit LLMCallEvent（即使后续 JSON 解析失败也要记录）
 	if a.recorder != nil && response != nil {
-		var promptTokens, completionTokens, totalTokens int
+		var promptTokens, completionTokens, totalTokens, cachedTokens int
 		if response.ResponseMeta != nil && response.ResponseMeta.Usage != nil {
 			usage := response.ResponseMeta.Usage
 			promptTokens = usage.PromptTokens
 			completionTokens = usage.CompletionTokens
 			totalTokens = usage.TotalTokens
+			cachedTokens = usage.PromptTokenDetails.CachedTokens
 		}
 		a.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
 			ModelType:        "light",
@@ -144,6 +145,8 @@ func (a *LLMAuditor) callLLM(ctx context.Context, prompt string) (*AuditResult, 
 			PromptTokens:     promptTokens,
 			CompletionTokens: completionTokens,
 			TotalTokens:      totalTokens,
+			CacheHit:         cachedTokens > 0,
+			CachedTokens:     cachedTokens,
 		}})
 	}
 	if err != nil {

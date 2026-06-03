@@ -10,6 +10,7 @@ export interface TokenUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  cached_tokens?: number;       // 缓存命中的 token 数量
 }
 
 // 单次 LLM 调用记录
@@ -25,6 +26,7 @@ export interface LLMCallRecord {
   input?: string;             // LLM 输入内容（prompt）
   output?: string;            // LLM 输出内容（completion）
   cache_hit?: boolean;        // 是否命中缓存
+  cached_tokens?: number;     // 缓存命中的 token 数量
 }
 
 // 推理步骤（Trace 中的 ReasoningStep）

@@ -249,13 +249,26 @@ const sourceLabels: Record<string, string> = {
   decision: '决策',
   report: '报告生成',
   deep_query: '深度调查',
+  safety_audit: '安全审计',
 };
 
 const sourceColors: Record<string, string> = {
   decision: 'blue',
   report: 'purple',
   deep_query: 'orange',
+  safety_audit: 'red',
 };
+
+// Agent 类型配置
+const agentTypeConfig: Record<string, { label: string; color: string }> = {
+  main: { label: '主Agent', color: 'blue' },
+  sub: { label: '子Agent', color: 'cyan' },
+};
+
+// 判断是否为子Agent调用
+function isSubAgentCall(source: string): boolean {
+  return source === 'safety_audit';
+}
 
 function LLMCallsTab({ trace }: { trace: TaskTrace }) {
   const calls: LLMCallRecord[] = trace.llm_calls ?? [];
@@ -281,6 +294,20 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
       key: 'timestamp',
       width: 180,
       render: (v: string) => formatTimestamp(v),
+    },
+    {
+      title: 'Agent',
+      key: 'agent_type',
+      width: 90,
+      render: (_: unknown, record: LLMCallRecord) => {
+        const isSub = isSubAgentCall(record.source);
+        const config = isSub ? agentTypeConfig.sub : agentTypeConfig.main;
+        return (
+          <Tag color={config.color}>
+            {config.label}
+          </Tag>
+        );
+      },
     },
     {
       title: '模型类型',
@@ -320,12 +347,30 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
       ),
     },
     {
-      title: '缓存',
+      title: '缓存命中率',
       dataIndex: 'cache_hit',
       key: 'cache_hit',
-      width: 70,
-      render: (v: boolean) =>
-        v ? <Tag color="cyan">命中</Tag> : <span style={{ color: '#bbb' }}>—</span>,
+      width: 100,
+      render: (_: boolean, record: LLMCallRecord) => {
+        if (record.cache_hit) {
+          const cached = record.cached_tokens ?? 0;
+          const promptTokens = record.prompt_tokens ?? 0;
+          const rate = promptTokens > 0 ? ((cached / promptTokens) * 100).toFixed(1) : '0.0';
+          return (
+            <Tooltip title={`缓存命中 ${cached.toLocaleString()} / Prompt ${promptTokens.toLocaleString()} tokens`}>
+              <Tag color="cyan">{rate}%</Tag>
+            </Tooltip>
+          );
+        }
+        return <span style={{ color: '#bbb' }}>—</span>;
+      },
+    },
+    {
+      title: 'Cached Tokens',
+      dataIndex: 'cached_tokens',
+      key: 'cached_tokens',
+      width: 120,
+      render: (v: number | undefined) => v ? v.toLocaleString() : '—',
     },
     {
       title: 'Prompt Tokens',
@@ -363,7 +408,12 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
   const powerCalls = calls.filter((c) => c.model_type === 'power');
   const lightTokens = lightCalls.reduce((s, c) => s + c.total_tokens, 0);
   const powerTokens = powerCalls.reduce((s, c) => s + c.total_tokens, 0);
-  const cacheHitCount = calls.filter((c) => c.cache_hit).length;
+  
+  // Agent 类型统计
+  const mainAgentCalls = calls.filter((c) => !isSubAgentCall(c.source));
+  const subAgentCalls = calls.filter((c) => isSubAgentCall(c.source));
+  const mainAgentTokens = mainAgentCalls.reduce((s, c) => s + c.total_tokens, 0);
+  const subAgentTokens = subAgentCalls.reduce((s, c) => s + c.total_tokens, 0);
 
   return (
     <div>
@@ -378,10 +428,11 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
       >
         {[
           { label: '总调用次数', value: calls.length },
+          { label: '主Agent调用', value: `${mainAgentCalls.length} 次 / ${mainAgentTokens.toLocaleString()} tokens` },
+          { label: '子Agent调用', value: `${subAgentCalls.length} 次 / ${subAgentTokens.toLocaleString()} tokens` },
           { label: 'Light 调用', value: `${lightCalls.length} 次 / ${lightTokens.toLocaleString()} tokens` },
           { label: 'Power 调用', value: `${powerCalls.length} 次 / ${powerTokens.toLocaleString()} tokens` },
           { label: '累计 Tokens', value: totalTokens.toLocaleString() },
-          ...(cacheHitCount > 0 ? [{ label: '缓存命中', value: `${cacheHitCount} 次` }] : []),
         ].map((item) => (
           <div
             key={item.label}
@@ -405,7 +456,7 @@ function LLMCallsTab({ trace }: { trace: TaskTrace }) {
         rowKey={(_, index) => String(index)}
         size="small"
         pagination={false}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1200 }}
         expandable={{
           expandedRowRender: (record) => {
             const hasInput = record.input && record.input.trim().length > 0;

@@ -78,6 +78,8 @@ func (n *ReportNode) Execute(ctx context.Context, s *state.State) (*state.State,
 				Timestamp:        time.Now().Format(time.RFC3339),
 				Input:            prompt,
 				Output:           response.Content,
+				CacheHit:         usage.PromptTokenDetails.CachedTokens > 0,
+				CachedTokens:     usage.PromptTokenDetails.CachedTokens,
 			}})
 		}
 	}

@@ -12,6 +12,7 @@ type TokenUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	CachedTokens     int `json:"cached_tokens,omitempty"` // 缓存命中的 token 数量
 }
 
 // TraceAuditInfo 安全审计结果 trace 记录
@@ -36,6 +37,7 @@ type LLMCallRecord struct {
 	Input            string `json:"input,omitempty"`  // LLM 输入内容（prompt）
 	Output           string `json:"output,omitempty"` // LLM 输出内容（completion）
 	CacheHit         bool   `json:"cache_hit"`        // 是否命中缓存
+	CachedTokens     int    `json:"cached_tokens"`    // 缓存命中的 token 数量
 }
 
 type TraceToolExecution struct {
