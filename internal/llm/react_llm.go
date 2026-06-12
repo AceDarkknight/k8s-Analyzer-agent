@@ -266,34 +266,6 @@ func (r *ReActLLM) buildTools() ([]tool.InvokableTool, error) {
 			return result.Output, nil
 		}
 		// fallback：旧路径（无 recorder 或 executor 不支持扩展接口）
-		// 优先走带回结果的路径
-		if r.safeExecutorWithResult != nil && r.recorder != nil {
-			result, err := r.safeExecutorWithResult.ExecuteSafeCommandWithResult(ctx, input.Command, input.Reason)
-			if err != nil {
-				return fmt.Sprintf("Error: %v", err), nil
-			}
-			allowed := result.AuditInfo != nil && result.AuditInfo.Allowed
-			// emit 工具 trace（含 AuditInfo）
-			r.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{
-				ToolName:  "execute_safe_command",
-				Args:      map[string]interface{}{"command": input.Command, "reason": input.Reason},
-				Success:   allowed,
-				Output:    result.Output,
-				AuditInfo: trc.ConvertAuditInfo(result.AuditInfo),
-				Timestamp: time.Now().Format(time.RFC3339),
-			}})
-			if !allowed {
-				reason := "未知原因"
-				advice := ""
-				if result.AuditInfo != nil {
-					reason = result.AuditInfo.Reason
-					advice = result.AuditInfo.Advice
-				}
-				return fmt.Sprintf("命令被安全审计拒绝。原因: %s。建议: %s", reason, advice), nil
-			}
-			return result.Output, nil
-		}
-		// fallback：旧路径
 		output, err := r.safeExecutor.ExecuteSafeCommand(ctx, input.Command, input.Reason)
 		if err != nil {
 			return fmt.Sprintf("Error: %v", err), nil
