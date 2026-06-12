@@ -378,7 +378,7 @@ func (n *ActionNode) executeSafeCommand(ctx context.Context, s *state.State, tc 
 	execRecord := state.CommandExecution{Command: command, ToolName: tc.Name, Args: tc.Args, Success: success, Output: displayOutput, DurationMs: time.Since(startTime).Milliseconds(), Timestamp: time.Now(), IsVerifyPhase: s.VerifyPhase, Cached: false}
 	s.AddCommandExecutionRecord(execRecord)
 	if n.recorder != nil {
-		n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: execRecord.Success, Output: displayOutput, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: false, Command: command}})
+		n.recorder.Emit(trc.ToolExecutedEvent{Execution: trc.TraceToolExecution{ToolName: tc.Name, Iteration: s.GetIterationCount(), Args: tc.Args, Success: execRecord.Success, Output: displayOutput, DurationMs: execRecord.DurationMs, Timestamp: execRecord.Timestamp.Format(time.RFC3339), Cached: false, Command: command, AuditInfo: trc.ConvertAuditInfo(result.AuditInfo)}})
 	}
 	metrics.RecordToolCall(tc.Name, execRecord.Success)
 

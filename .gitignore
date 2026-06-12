@@ -42,3 +42,4 @@ web/dist/
 data/traces/
 
 .playwright-mcp/
+.sisyphus/run-continuation/

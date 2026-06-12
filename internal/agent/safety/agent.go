@@ -7,6 +7,7 @@ import (
 
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shellmcp"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // CommandRequest represents a command execution request
@@ -16,6 +17,7 @@ type CommandRequest struct {
 	Source      string
 	Iteration   int
 	ContextInfo map[string]string
+	Recorder    *trc.TaskRecorder // 可选，用于 LLM audit trace
 }
 
 // CommandResult represents the result of command execution
@@ -40,6 +42,12 @@ type AuditInfo struct {
 // Auditor is the interface for safety auditors
 type Auditor interface {
 	Audit(ctx context.Context, command, reason string) (*AuditResult, error)
+}
+
+// TraceAwareAuditor 支持 trace 记录的审计器接口
+type TraceAwareAuditor interface {
+	Auditor
+	AuditWithTrace(ctx context.Context, command, reason string, recorder *trc.TaskRecorder) (*AuditResult, error)
 }
 
 // CommandExecutor is the interface for command execution
@@ -151,8 +159,18 @@ func (a *SafetyAgent) auditAndExecute(ctx context.Context, req *CommandRequest) 
 		}, nil
 	}
 
-	// Call LLM audit
-	auditResult, err := a.auditor.Audit(ctx, req.Command, req.Reason)
+	// Call LLM audit（优先使用 trace-aware 路径）
+	var auditResult *AuditResult
+	var err error
+	if req.Recorder != nil {
+		if traced, ok := a.auditor.(TraceAwareAuditor); ok {
+			auditResult, err = traced.AuditWithTrace(ctx, req.Command, req.Reason, req.Recorder)
+		} else {
+			auditResult, err = a.auditor.Audit(ctx, req.Command, req.Reason)
+		}
+	} else {
+		auditResult, err = a.auditor.Audit(ctx, req.Command, req.Reason)
+	}
 	if err != nil {
 		logger.Error("LLM audit failed",
 			logger.String("command", req.Command),
@@ -270,6 +288,15 @@ func exitCodeFromExecuteResult(result *shellmcp.ExecuteResult) int {
 		return 1
 	}
 	return 0
+}
+
+// ExecuteSimpleWithResult returns full CommandResult including AuditInfo
+func (a *SafetyAgent) ExecuteSimpleWithResult(ctx context.Context, command, reason string) (*CommandResult, error) {
+	return a.ExecuteSafeCommand(ctx, &CommandRequest{
+		Command: command,
+		Reason:  reason,
+		Source:  "simple",
+	})
 }
 
 // ExecuteSimple is a simplified command execution (returns output string or error description)

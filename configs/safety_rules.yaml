@@ -36,6 +36,7 @@ whitelist:
 blacklist:
   # 这些模式总是被拒绝，不进入 LLM 审计（正则匹配）
   patterns:
+    - "kubectl"
     - "rm\\s+-rf"
     - "rm\\s+-r"
     - "mkfs"

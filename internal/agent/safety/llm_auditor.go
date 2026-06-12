@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm/promptregistry"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
+	trc "github.com/AceDarkknight/k8s-analyzer-agent/internal/trace"
 )
 
 // AuditResult LLM 审计结果
@@ -22,14 +25,40 @@ type AuditResult struct {
 
 // LLMAuditor LLM 语义审计器
 type LLMAuditor struct {
-	llm model.ChatModel // 使用 Light 模型
+	llm       model.ChatModel // 使用 Light 模型
+	promptReg *promptregistry.PromptRegistry
+	modelName string            // 模型名称，用于 trace 记录
+	recorder  *trc.TaskRecorder // 临时注入，不持久持有
 }
 
 // NewLLMAuditor 创建 LLM 审计器
-func NewLLMAuditor(llm model.ChatModel) *LLMAuditor {
+func NewLLMAuditor(llm model.ChatModel, promptReg *promptregistry.PromptRegistry) *LLMAuditor {
 	return &LLMAuditor{
-		llm: llm,
+		llm:       llm,
+		promptReg: promptReg,
 	}
+}
+
+// WithModelName 设置模型名称，用于 trace 记录。返回自身以支持链式调用。
+func (a *LLMAuditor) WithModelName(name string) *LLMAuditor {
+	a.modelName = name
+	return a
+}
+
+// WithRecorder 返回一个带 recorder 的 auditor 浅拷贝，用于单次审计调用。
+// 不修改原 auditor，避免并发任务串扰。
+func (a *LLMAuditor) WithRecorder(recorder *trc.TaskRecorder) *LLMAuditor {
+	return &LLMAuditor{
+		llm:       a.llm,
+		promptReg: a.promptReg,
+		modelName: a.modelName,
+		recorder:  recorder,
+	}
+}
+
+// AuditWithTrace 实现 TraceAwareAuditor 接口，带 trace 记录的审计。
+func (a *LLMAuditor) AuditWithTrace(ctx context.Context, command, reason string, recorder *trc.TaskRecorder) (*AuditResult, error) {
+	return a.WithRecorder(recorder).Audit(ctx, command, reason)
 }
 
 // Audit 审计命令安全性
@@ -40,7 +69,7 @@ func (a *LLMAuditor) Audit(ctx context.Context, command, reason string) (*AuditR
 	)
 
 	// 构建审计 Prompt
-	prompt := buildAuditPrompt(command, reason)
+	prompt := a.buildAuditPrompt(ctx, command, reason)
 
 	// 调用 LLM
 	result, err := a.callLLM(ctx, prompt)
@@ -68,6 +97,20 @@ func (a *LLMAuditor) Audit(ctx context.Context, command, reason string) (*AuditR
 	return result, nil
 }
 
+func (a *LLMAuditor) buildAuditPrompt(ctx context.Context, command, reason string) string {
+	if a.promptReg == nil {
+		return buildAuditPrompt(command, reason)
+	}
+	prompt, err := a.promptReg.BuildSafety(ctx, "safety", promptregistry.VersionDefault, &promptregistry.SafetyPromptContext{
+		Command: command,
+		Reason:  reason,
+	})
+	if err != nil {
+		return ""
+	}
+	return prompt
+}
+
 // callLLM 调用 LLM 并解析结果
 func (a *LLMAuditor) callLLM(ctx context.Context, prompt string) (*AuditResult, error) {
 	messages := []*schema.Message{
@@ -77,7 +120,35 @@ func (a *LLMAuditor) callLLM(ctx context.Context, prompt string) (*AuditResult, 
 		},
 	}
 
+	start := time.Now()
 	response, err := a.llm.Generate(ctx, messages)
+	duration := time.Since(start)
+
+	// emit LLMCallEvent（即使后续 JSON 解析失败也要记录）
+	if a.recorder != nil && response != nil {
+		var promptTokens, completionTokens, totalTokens, cachedTokens int
+		if response.ResponseMeta != nil && response.ResponseMeta.Usage != nil {
+			usage := response.ResponseMeta.Usage
+			promptTokens = usage.PromptTokens
+			completionTokens = usage.CompletionTokens
+			totalTokens = usage.TotalTokens
+			cachedTokens = usage.PromptTokenDetails.CachedTokens
+		}
+		a.recorder.Emit(trc.LLMCallEvent{Call: trc.LLMCallRecord{
+			ModelType:        "light",
+			ModelName:        a.modelName,
+			Source:           "safety_audit",
+			DurationMs:       duration.Milliseconds(),
+			Timestamp:        time.Now().Format(time.RFC3339),
+			Input:            trc.SanitizeTraceText(prompt),
+			Output:           trc.SanitizeTraceText(response.Content),
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      totalTokens,
+			CacheHit:         cachedTokens > 0,
+			CachedTokens:     cachedTokens,
+		}})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("LLM generate failed: %w", err)
 	}

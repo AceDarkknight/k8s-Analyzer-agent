@@ -17,6 +17,7 @@ import (
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/client/shellmcp"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/config"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm"
+	"github.com/AceDarkknight/k8s-analyzer-agent/internal/llm/promptregistry"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/logger"
 	skillpkg "github.com/AceDarkknight/k8s-analyzer-agent/internal/skill"
 	"github.com/AceDarkknight/k8s-analyzer-agent/internal/state"
@@ -101,7 +102,27 @@ func main() {
 	logger.Info("Rule Engine 初始化成功")
 
 	var auditor safety.Auditor
-	auditor = safety.NewLLMAuditor(llmRouter.Light())
+
+	// 初始化 Prompt Registry（失败即启动失败）
+	promptReg := promptregistry.NewPromptRegistry()
+	if err := promptReg.Load(cfg.Prompt.TemplateDir); err != nil {
+		logger.Fatal("Prompt Registry 加载失败",
+			logger.String("dir", cfg.Prompt.TemplateDir),
+			logger.Err(err),
+		)
+	}
+	_, specs, blocks := promptReg.Stats()
+	logger.Info("Prompt Registry 初始化成功",
+		logger.String("dir", cfg.Prompt.TemplateDir),
+		logger.Int("specs", specs),
+		logger.Int("blocks", blocks),
+	)
+
+	if _, err := promptReg.BuildSafety(ctx, "safety", promptregistry.VersionDefault, &promptregistry.SafetyPromptContext{Command: "echo test", Reason: "startup validation"}); err != nil {
+		logger.Fatal("Safety Prompt 验证失败", logger.Err(err))
+	}
+
+	auditor = safety.NewLLMAuditor(llmRouter.Light(), promptReg).WithModelName(llmRouter.LightModelName())
 
 	safetyAgent := safety.NewSafetyAgent(ruleEngine, auditor, mcpClient)
 	logger.Info("Safety Agent 初始化成功")
@@ -109,7 +130,7 @@ func main() {
 	// 9. 初始化 ReAct LLM
 	// 创建适配器将 SafetyAgent 适配为 SafeCommandExecutor 接口
 	safeExecutor := &safetyAgentAdapter{safetyAgent: safetyAgent}
-	reactLLM := llm.NewReActLLM(llmRouter, gwClient, safeExecutor)
+	reactLLM := llm.NewReActLLM(llmRouter, gwClient, safeExecutor, promptReg)
 	logger.Info("ReAct LLM 初始化成功")
 
 	// 10. 初始化 FindingStore
@@ -178,7 +199,7 @@ func main() {
 	}
 
 	// 12. 初始化 Main Agent
-	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, toolCache, skillLoader, traceStore, &cfg.Agent)
+	agent := diagnosis.NewAgent(gwClient, safetyAgent, llmRouter, reactLLM, findingStore, toolCache, skillLoader, traceStore, &cfg.Agent, promptReg)
 	logger.Info("Main Agent 初始化成功")
 
 	// 13. 执行诊断
@@ -205,6 +226,15 @@ type safetyAgentAdapter struct {
 // ExecuteSafeCommand 实现 llm.SafeCommandExecutor 接口
 func (a *safetyAgentAdapter) ExecuteSafeCommand(ctx context.Context, command, reason string) (string, error) {
 	return a.safetyAgent.ExecuteSimple(ctx, command, reason)
+}
+
+// ExecuteSafeCommandWithResult 实现 llm.SafeCommandExecutorWithResult 接口
+func (a *safetyAgentAdapter) ExecuteSafeCommandWithResult(ctx context.Context, command, reason string) (*safety.CommandResult, error) {
+	return a.safetyAgent.ExecuteSafeCommand(ctx, &safety.CommandRequest{
+		Command: command,
+		Reason:  reason,
+		Source:  "react",
+	})
 }
 
 func printReport(result *state.AnalysisResult) {
